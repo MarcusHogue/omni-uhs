@@ -1,0 +1,65 @@
+# Hint Reader — local stack, no Tailscale.
+#
+#   docker compose -f docker-compose.local.yml up --build -d
+#   open http://localhost:8081
+#
+# Same two application containers as the tailnet deployment, but on a plain
+# bridge network with the web port published. Service workers and IndexedDB
+# work on http://localhost (browsers treat it as a secure context), so the full
+# offline path is testable here — what you do not get is a certificate iOS
+# trusts, which is what the Tailscale stack is for.
+
+services:
+  proxy:
+    build:
+      context: .
+      dockerfile: proxy/Dockerfile
+    image: ghcr.io/marcushogue/hint-reader-proxy:latest
+    restart: unless-stopped
+    environment:
+      PORT: 8080
+      HOST: 0.0.0.0
+      CACHE_DIR: /data/cache
+      USER_AGENT: ${USER_AGENT:-HintReader/1.0 (+personal use; local development)}
+    volumes:
+      - cache-data:/data/cache
+    networks: [hint]
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    image: ghcr.io/marcushogue/hint-reader-web:latest
+    restart: unless-stopped
+    environment:
+      # No shared network namespace here, so reach the proxy by service name.
+      API_UPSTREAM: proxy:8080
+    ports:
+      - "127.0.0.1:8081:80"
+    depends_on:
+      - proxy
+    networks: [hint]
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  hint:
+
+volumes:
+  cache-data:
