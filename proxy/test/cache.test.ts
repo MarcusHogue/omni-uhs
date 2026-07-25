@@ -6,13 +6,13 @@
  * told to.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { Cache } from '../src/cache/index.js';
+import { Cache, describeCacheDirFailure } from '../src/cache/index.js';
 import { FakeUpstream } from './helpers/upstream.js';
 
 let upstream: FakeUpstream;
@@ -213,5 +213,38 @@ describe('Retry-After', () => {
       cache.fetch({ url: upstream.url('/closed'), ttl: 60, allowlist: allow() }),
     ).rejects.toThrow(/503/);
     expect(upstream.hitsFor('/closed')).toBe(1);
+  });
+});
+
+describe('cache directory permissions', () => {
+  // Root ignores directory permissions, so the end-to-end version of this only
+  // means anything as a normal user. The message mapping itself is tested
+  // directly below and runs everywhere.
+  const asRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  it('maps EACCES to an instruction, not a stack trace', () => {
+    const error = Object.assign(new Error('EACCES: permission denied, mkdir'), {
+      code: 'EACCES',
+    });
+    const described = describeCacheDirFailure('/data/cache', error);
+    expect(described.message).toContain('Cannot write to CACHE_DIR (/data/cache)');
+    expect(described.message).toContain('chown -R 65532:65532');
+    expect(described.message).toContain('named Docker volume');
+  });
+
+  it('passes other errors through untouched', () => {
+    const error = Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+    expect(describeCacheDirFailure('/data/cache', error)).toBe(error);
+  });
+
+  it.skipIf(asRoot)('surfaces that message when the directory really is unwritable', () => {
+    const readOnly = mkdtempSync(join(tmpdir(), 'hint-ro-'));
+    chmodSync(readOnly, 0o500);
+    try {
+      expect(() => new Cache(join(readOnly, 'cache'))).toThrow(/Cannot write to CACHE_DIR/);
+    } finally {
+      chmodSync(readOnly, 0o700);
+      rmSync(readOnly, { recursive: true, force: true });
+    }
   });
 });

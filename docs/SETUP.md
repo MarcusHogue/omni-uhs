@@ -153,32 +153,25 @@ ghcr.io/marcushogue/omni-uhs-web:latest      # Caddy + the built PWA
 ghcr.io/marcushogue/omni-uhs-proxy:latest    # Fastify cache/allowlist proxy
 ```
 
-Every build is also tagged with its commit SHA (`…:1978cd7…`), so a bad deploy
-can be pinned back to a known-good one. Browse them at
-<https://github.com/MarcusHogue?tab=packages>.
-
-They are published by `.github/workflows/publish.yml` **on push to `main`
-only** — until this branch merges, the tags above do not exist yet and
-`docker compose pull` will 404. Build from source in the meantime:
+Every build is also tagged with its commit SHA, so a bad deploy can be pinned
+back to a known-good one. Both are published by
+`.github/workflows/publish.yml` on push to `main`, and both are **public** — no
+`docker login` needed:
 
 ```bash
-docker compose -f docker-compose.local.yml up -d --build
+docker pull ghcr.io/marcushogue/omni-uhs-web:latest
+docker pull ghcr.io/marcushogue/omni-uhs-proxy:latest
 ```
 
-### Authentication
+Browse them at <https://github.com/MarcusHogue?tab=packages>. They are
+`linux/amd64` only; see the Synology notes for ARM.
 
-This repository is private, so its packages are private too and pulling needs a
-login. Create a classic PAT with the **`read:packages`** scope
-(<https://github.com/settings/tokens>), then:
+If you ever make the packages private again, pulling needs a classic PAT with
+the **`read:packages`** scope:
 
 ```bash
 echo "$GHCR_PAT" | docker login ghcr.io -u MarcusHogue --password-stdin
 ```
-
-Alternatively, make each package public — package page → Package settings →
-Change visibility. The images contain no hint content and no secrets, only the
-app itself, so public is a reasonable choice and removes the login step from
-every machine that runs this.
 
 ---
 
@@ -202,10 +195,12 @@ them, while the content-hashed assets are cached for a year.
 
 ## 7. Troubleshooting
 
-**The proxy container restarts in a loop.** Check `docker compose logs proxy`.
-An `EACCES … /data/cache` means the volume was created by an older build; the
-image seeds that directory with the right ownership, so `docker compose down -v`
-and up again fixes it (you lose only the upstream cache).
+**The proxy container restarts in a loop.** Check `docker compose logs proxy`;
+it names the cause. An `EACCES` on the cache directory means it is a **bind
+mount** whose host directory the container user cannot write to — the container
+runs as uid 65532, so `sudo chown -R 65532:65532 /path/on/host` fixes it. Named
+volumes (what both compose files here use) never hit this: the image seeds
+`/data/cache` with the right ownership and the volume inherits it.
 
 **Search returns warnings about a source.** That is the designed behaviour: a
 source that is unreachable names itself in `warnings[]` and the others still
