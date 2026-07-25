@@ -152,8 +152,10 @@ on each device. **Settings → Export & import** has two ways to take a copy:
 Import restores either. Reveal progress is merged upwards, so restoring an older
 backup never re-hides a hint you have already seen.
 
-Your theme and text size are not in either file: they live in `localStorage`,
-per device, and are a two-tap fix rather than something worth restoring.
+Theme and text size ride along in a full backup too. They live in
+`localStorage` rather than IndexedDB — they have to be readable before the first
+paint, or the app flashes the wrong theme on every launch — so they are stored
+separately and restored separately.
 
 ---
 
