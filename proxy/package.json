@@ -2,6 +2,7 @@
   "name": "@omni-uhs/proxy",
   "private": true,
   "version": "1.0.0",
+  "license": "MIT",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
