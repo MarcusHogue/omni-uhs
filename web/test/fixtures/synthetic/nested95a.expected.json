@@ -1,0 +1,163 @@
+{
+  "document": {
+    "id": "uhs-3d2169bfa4aac4ba",
+    "game": {
+      "title": "The Nested Grotto"
+    },
+    "source": {
+      "kind": "uhs",
+      "url": "fixture://nested95a.uhs",
+      "license": "proprietary-personal-use",
+      "personalUseOnly": true
+    },
+    "fetchedAt": "2026-01-01T00:00:00.000Z",
+    "root": {
+      "id": "uhs:1",
+      "type": "subject",
+      "label": "The Nested Grotto",
+      "children": [
+        {
+          "id": "uhs:3",
+          "type": "text",
+          "label": "Version",
+          "content": [
+            {
+              "kind": "run",
+              "text": "95a"
+            }
+          ]
+        },
+        {
+          "id": "uhs:5",
+          "type": "text",
+          "label": "File information",
+          "content": [
+            {
+              "kind": "run",
+              "text": "Copyright: Synthetic fixture, written for this repository."
+            }
+          ]
+        },
+        {
+          "id": "uhs:8",
+          "type": "subject",
+          "label": "Chapter One",
+          "children": [
+            {
+              "id": "uhs:10",
+              "type": "hints",
+              "label": "How do I cross the chasm?",
+              "hints": [
+                {
+                  "id": "uhs:12",
+                  "type": "hint",
+                  "content": [
+                    {
+                      "kind": "run",
+                      "text": "Look for a bridge."
+                    }
+                  ]
+                },
+                {
+                  "id": "uhs:14",
+                  "type": "hint",
+                  "content": [
+                    {
+                      "kind": "run",
+                      "text": "The bridge is invisible.\nThrow sand on it."
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "uhs:16",
+              "type": "hints",
+              "label": "What about the guardian?",
+              "hints": [
+                {
+                  "id": "uhs:18",
+                  "type": "hint",
+                  "content": [
+                    {
+                      "kind": "run",
+                      "text": "It only sleeps at noon."
+                    }
+                  ],
+                  "nested": [
+                    {
+                      "type": "subject",
+                      "label": "Show me the exact time",
+                      "children": [
+                        {
+                          "id": "uhs:20",
+                          "type": "hints",
+                          "label": "Show me the exact time",
+                          "hints": [
+                            {
+                              "id": "uhs:22",
+                              "type": "hint",
+                              "content": [
+                                {
+                                  "kind": "run",
+                                  "text": "Wait until the sundial reads XII."
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ],
+                      "id": "uhs:20:w"
+                    }
+                  ]
+                },
+                {
+                  "id": "uhs:24",
+                  "type": "hint",
+                  "content": [
+                    {
+                      "kind": "run",
+                      "text": "Then walk straight past it."
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "uhs:25",
+              "type": "text",
+              "label": "Map notes",
+              "content": [
+                {
+                  "kind": "run",
+                  "text": "The grotto has three levels.\nOnly the middle one matters."
+                }
+              ]
+            },
+            {
+              "id": "uhs:28",
+              "type": "link",
+              "label": "Back to Chapter One",
+              "targetId": "uhs:8"
+            }
+          ]
+        },
+        {
+          "id": "uhs:35",
+          "type": "text",
+          "label": "Registration-gated hints",
+          "content": [
+            {
+              "kind": "run",
+              "text": "This file marks some hints as available only to registered users. Enable \"Show registration-gated hints\" in Settings to decode them."
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "warnings": [
+    "Checksum is zero — file was written by an unofficial authoring tool. Reading anyway.",
+    "Unknown hunk type \"mystery\" at line 32; skipped 3 lines."
+  ]
+}

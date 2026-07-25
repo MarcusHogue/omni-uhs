@@ -1,0 +1,32 @@
+node_modules/
+dist/
+build/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Secrets
+.env
+.env.local
+
+# Runtime data
+data/
+cache/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Playwright
+test-results/
+playwright-report/
+.playwright/
+
+# --- Legal guardrail (spec 10 / 11) -----------------------------------------
+# Real hint files are copyrighted. NEVER commit them, nor any JSON derived from
+# them. Only synthetic, self-authored fixtures live in git.
+web/test/fixtures/real/
+*.uhs
+*.zip
+!web/test/fixtures/synthetic/*.uhs
+
+.DS_Store
