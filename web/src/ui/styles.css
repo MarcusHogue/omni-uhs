@@ -1,18 +1,321 @@
-/* Phone-first, dark, and deliberately plain: the content is the point. */
+/*
+ * Omni UHS styles.
+ *
+ * Everything visual comes from custom properties, so a theme is a block of
+ * variables and nothing else — no per-theme layout, no conditional markup. The
+ * retro themes change the paint; they never change where you tap or how big the
+ * text is.
+ *
+ * Reading comes first: the hint column is measured in characters, the chrome
+ * gets out of the way when you scroll, and nothing animates that does not need
+ * to.
+ */
 
-:root {
+/* ---------------------------------------------------------------- tokens */
+
+:root,
+[data-theme='dark'] {
   --bg: #12141c;
+  /*
+   * `--bg` is the desktop; `--page` is the window the content sits in. On the
+   * modern themes they are the same colour and the distinction is invisible.
+   * On the retro themes it is the whole trick: a 1990s OS never put body text
+   * on the desktop pattern, and neither do we — which is also why the retro
+   * palettes stay legible.
+   */
+  --page: var(--bg);
+  --page-text: var(--text);
   --surface: #1b1e29;
   --surface-2: #232736;
   --text: #e8eaf2;
-  --muted: #949cb5;
+  --text-dim: #949cb5;
   --accent: #7aa2f7;
-  --accent-dim: #33406b;
-  --danger: #f7768e;
+  --accent-text: #0d1017;
+  --accent-soft: #29334f;
+  --line: #2c3040;
   --ok: #9ece6a;
-  --radius: 10px;
+  --warn: #e0af68;
+  --danger: #f7768e;
+
+  --chrome-bg: #171a24;
+  --chrome-text: #e8eaf2;
+  --chrome-line: #000;
+
+  --radius: 12px;
+  --radius-sm: 8px;
+  --border-w: 1px;
+  --bevel-out: none;
+  --bevel-in: none;
+  --card-shadow: none;
+  --title-bg: var(--chrome-bg);
+  --title-text: var(--chrome-text);
+
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-read: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --letter: normal;
+
   color-scheme: dark;
 }
+
+[data-theme='light'] {
+  --bg: #f6f7fa;
+  --page: #f6f7fa;
+  --surface: #ffffff;
+  --surface-2: #eceef4;
+  --text: #14161d;
+  --text-dim: #5c6478;
+  --accent: #2f5fd0;
+  --accent-text: #ffffff;
+  --accent-soft: #dde5fa;
+  --line: #d8dce6;
+  --ok: #2f7d32;
+  --warn: #96660a;
+  --danger: #c02843;
+
+  --chrome-bg: #ffffff;
+  --chrome-text: #14161d;
+  --chrome-line: #d8dce6;
+
+  --card-shadow: 0 1px 2px rgba(15, 20, 40, 0.08);
+  --title-bg: #ffffff;
+  --title-text: #14161d;
+  color-scheme: light;
+}
+
+/* --- Windows 95 --------------------------------------------------------- */
+[data-theme='win95'] {
+  --bg: #008080;
+  /* Teal is the desktop; the content is a grey window with white listboxes. */
+  --page: #c0c0c0;
+  --page-text: #000000;
+  --surface: #ffffff;
+  --surface-2: #c0c0c0;
+  --text: #000000;
+  --text-dim: #3f3f3f;
+  --accent: #000080;
+  --accent-text: #ffffff;
+  --accent-soft: #b0b8d8;
+  --line: #808080;
+  --ok: #006000;
+  --warn: #7a5c00;
+  --danger: #a00000;
+
+  --chrome-bg: #c0c0c0;
+  --chrome-text: #000000;
+  --chrome-line: #000000;
+
+  --radius: 0;
+  --radius-sm: 0;
+  --border-w: 0;
+  /* The classic four-tone bevel, as one shadow. */
+  --bevel-out: inset -1px -1px #0a0a0a, inset 1px 1px #ffffff, inset -2px -2px #808080,
+    inset 2px 2px #dfdfdf;
+  --bevel-in: inset 1px 1px #0a0a0a, inset -1px -1px #ffffff, inset 2px 2px #808080,
+    inset -2px -2px #dfdfdf;
+  --title-bg: #000080;
+  --title-text: #ffffff;
+  --title-accent: #c0c0c0;
+
+  --font-ui: 'Segoe UI', Tahoma, 'MS Sans Serif', sans-serif;
+  --font-read: 'Segoe UI', Tahoma, 'MS Sans Serif', sans-serif;
+  color-scheme: light;
+}
+
+/* --- Windows 3.1 -------------------------------------------------------- */
+[data-theme='win31'] {
+  --bg: #a0a0a0;
+  --page: #c0c0c0;
+  --page-text: #000000;
+  --surface: #ffffff;
+  --surface-2: #c0c0c0;
+  --text: #000000;
+  --text-dim: #404040;
+  --accent: #000080;
+  --accent-text: #ffffff;
+  --accent-soft: #a8b0d0;
+  --line: #000000;
+  --ok: #006000;
+  --warn: #7a5c00;
+  --danger: #a00000;
+
+  --chrome-bg: #c0c0c0;
+  --chrome-text: #000000;
+  --chrome-line: #000000;
+
+  --radius: 0;
+  --radius-sm: 0;
+  --border-w: 0;
+  /* Heavier and squarer than 95: two flat steps, no soft grey. */
+  --bevel-out: inset -2px -2px #000000, inset 2px 2px #ffffff;
+  --bevel-in: inset 2px 2px #000000, inset -2px -2px #ffffff;
+  --title-bg: #000080;
+  --title-text: #ffffff;
+  --title-accent: #c0c0c0;
+
+  --font-ui: 'Segoe UI', Tahoma, 'MS Sans Serif', sans-serif;
+  --font-read: 'Times New Roman', Georgia, serif;
+  color-scheme: light;
+}
+
+/* --- Mac System 7 ------------------------------------------------------- */
+[data-theme='system7'] {
+  --bg: #8f8f8f;
+  --page: #ffffff;
+  --page-text: #000000;
+  --surface: #ffffff;
+  --surface-2: #eeeeee;
+  --text: #000000;
+  --text-dim: #4a4a4a;
+  --accent: #000000;
+  --accent-text: #ffffff;
+  --accent-soft: #dcdcdc;
+  --line: #000000;
+  --ok: #006000;
+  --warn: #6b4e00;
+  --danger: #9b0000;
+
+  --chrome-bg: #ffffff;
+  --chrome-text: #000000;
+  --chrome-line: #000000;
+
+  --radius: 0;
+  --radius-sm: 0;
+  --border-w: 1px;
+  --bevel-out: none;
+  --bevel-in: none;
+  --card-shadow: 2px 2px 0 #000000;
+  --title-bg: #ffffff;
+  --title-text: #000000;
+
+  --font-ui: 'Lucida Grande', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-read: 'Lucida Grande', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color-scheme: light;
+}
+
+/* --- Mac OS 9 (Platinum) ------------------------------------------------ */
+[data-theme='platinum'] {
+  --bg: #5c5c5c;
+  --page: #dedede;
+  --page-text: #000000;
+  --surface: #eeeeee;
+  --surface-2: #dedede;
+  --text: #000000;
+  --text-dim: #4d4d4d;
+  --accent: #3366cc;
+  --accent-text: #ffffff;
+  --accent-soft: #c3d0ea;
+  --line: #8a8a8a;
+  --ok: #0a6b0a;
+  --warn: #7a5c00;
+  --danger: #b00020;
+
+  --chrome-bg: #cccccc;
+  --chrome-text: #000000;
+  --chrome-line: #7a7a7a;
+
+  --radius: 4px;
+  --radius-sm: 3px;
+  --border-w: 1px;
+  --bevel-out: inset -1px -1px #999999, inset 1px 1px #ffffff;
+  --bevel-in: inset 1px 1px #999999, inset -1px -1px #ffffff;
+  --title-bg: #cccccc;
+  --title-text: #000000;
+
+  --font-ui: 'Lucida Grande', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  --font-read: 'Lucida Grande', 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  color-scheme: light;
+}
+
+/* --- Amiga Workbench 1.3 ------------------------------------------------ */
+[data-theme='workbench'] {
+  --bg: #0055aa;
+  /* Workbench put a white window on the blue desktop; so do we. */
+  --page: #ffffff;
+  --page-text: #000000;
+  --surface: #ffffff;
+  --surface-2: #dfe6f0;
+  --text: #000000;
+  --text-dim: #34455c;
+  --accent: #ff8800;
+  --accent-text: #000000;
+  --accent-soft: #ffd9ab;
+  --line: #000000;
+  --ok: #006622;
+  --warn: #a35c00;
+  --danger: #aa0000;
+
+  --chrome-bg: #ffffff;
+  --chrome-text: #000000;
+  --chrome-line: #000000;
+
+  --radius: 0;
+  --radius-sm: 0;
+  --border-w: 2px;
+  --bevel-out: none;
+  --bevel-in: none;
+  --title-bg: #0055aa;
+  --title-text: #ffffff;
+  --title-accent: #ff8800;
+
+  --font-ui: 'Courier New', ui-monospace, monospace;
+  --font-read: 'Courier New', ui-monospace, monospace;
+  --letter: 0.01em;
+  color-scheme: light;
+}
+
+/* --- DOS ---------------------------------------------------------------- */
+[data-theme='dos'] {
+  --bg: #000000;
+  --page: #000000;
+  --page-text: #aaaaaa;
+  --surface: #0000aa;
+  --surface-2: #0000cc;
+  --text: #aaaaaa;
+  --text-dim: #7c7c7c;
+  --accent: #ffff55;
+  --accent-text: #000000;
+  --accent-soft: #000088;
+  --line: #5555ff;
+  --ok: #55ff55;
+  --warn: #ffff55;
+  --danger: #ff5555;
+
+  --chrome-bg: #0000aa;
+  --chrome-text: #ffffff;
+  --chrome-line: #5555ff;
+
+  --radius: 0;
+  --radius-sm: 0;
+  --border-w: 1px;
+  --bevel-out: none;
+  --bevel-in: none;
+  --title-bg: #00aaaa;
+  --title-text: #000000;
+  --title-accent: #000055;
+
+  --font-ui: 'Courier New', ui-monospace, monospace;
+  --font-read: 'Courier New', ui-monospace, monospace;
+  --font-mono: 'Courier New', ui-monospace, monospace;
+  color-scheme: dark;
+}
+
+/* Text size, independent of theme. */
+:root,
+[data-scale='medium'] {
+  --size-base: 16px;
+  --size-read: 17px;
+}
+[data-scale='small'] {
+  --size-base: 15px;
+  --size-read: 15px;
+}
+[data-scale='large'] {
+  --size-base: 17px;
+  --size-read: 20px;
+}
+
+/* ----------------------------------------------------------------- base */
 
 * {
   box-sizing: border-box;
@@ -24,34 +327,71 @@ body {
   padding: 0;
   background: var(--bg);
   color: var(--text);
-  font: 16px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-ui);
+  font-size: var(--size-base);
+  line-height: 1.5;
+  letter-spacing: var(--letter);
   overscroll-behavior-y: none;
+  -webkit-text-size-adjust: 100%;
+}
+
+a {
+  color: var(--accent);
 }
 
 .app {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-  padding-bottom: env(safe-area-inset-bottom);
 }
 
+/* --- chrome that gets out of the way ------------------------------------ */
+
 .app-header {
+  position: sticky;
+  top: 0;
+  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 8px;
-  padding: max(12px, env(safe-area-inset-top)) 16px 8px;
+  padding: max(10px, env(safe-area-inset-top)) 16px 10px;
+  /* The header is the window's title bar — which is where most of a retro
+     theme's personality lives. */
+  background: var(--title-bg);
+  color: var(--title-text);
+  border-bottom: 1px solid var(--chrome-line);
+  transition: transform 0.22s ease;
 }
 
 .app-header h1 {
-  font-size: 18px;
+  font-size: 15px;
+  font-weight: 600;
   margin: 0;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.02em;
+}
+
+.app-header .wordmark {
+  color: var(--title-accent, var(--accent));
+}
+
+/* Scrolling down hides the chrome; scrolling up brings it straight back. */
+.chrome-hidden .app-header {
+  transform: translateY(-110%);
+}
+
+.chrome-hidden .tabbar {
+  transform: translateY(110%);
 }
 
 .app-main {
   flex: 1;
-  padding: 8px 16px 88px;
+  width: 100%;
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 12px 16px 96px;
+  background: var(--page);
+  color: var(--page-text);
 }
 
 .tabbar {
@@ -59,17 +399,19 @@ body {
   bottom: 0;
   left: 0;
   right: 0;
+  z-index: 20;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  background: var(--surface);
-  border-top: 1px solid #000;
+  background: var(--chrome-bg);
+  border-top: 1px solid var(--chrome-line);
   padding-bottom: env(safe-area-inset-bottom);
+  transition: transform 0.22s ease;
 }
 
 .tabbar a {
-  padding: 14px 4px;
+  padding: 13px 4px;
   text-align: center;
-  color: var(--muted);
+  color: var(--text-dim);
   text-decoration: none;
   font-size: 13px;
 }
@@ -77,30 +419,40 @@ body {
 .tabbar a.active {
   color: var(--accent);
   background: var(--surface-2);
+  box-shadow: var(--bevel-in);
 }
 
-/* --- controls --------------------------------------------------------- */
+/* --- controls ------------------------------------------------------------ */
 
 input[type='search'],
 input[type='text'] {
   width: 100%;
-  padding: 12px 14px;
-  font-size: 16px; /* < 16px makes iOS zoom on focus */
-  border-radius: var(--radius);
-  border: 1px solid #000;
-  background: var(--surface);
+  padding: 11px 13px;
+  /* Never below 16px: iOS zooms the page when a smaller field is focused. */
+  font-size: max(16px, var(--size-base));
+  font-family: var(--font-ui);
   color: var(--text);
+  background: var(--surface);
+  border: var(--border-w) solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--bevel-in);
 }
 
 button {
   font: inherit;
+  font-family: var(--font-ui);
   color: var(--text);
   background: var(--surface-2);
-  border: 1px solid #000;
-  border-radius: var(--radius);
+  border: var(--border-w) solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--bevel-out);
   padding: 10px 14px;
+  min-height: 44px;
   cursor: pointer;
-  min-height: 44px; /* comfortable tap target */
+}
+
+button:active:not(:disabled) {
+  box-shadow: var(--bevel-in);
 }
 
 button:disabled {
@@ -112,13 +464,24 @@ button.danger {
   color: var(--danger);
 }
 
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 .linkish {
   background: none;
   border: none;
+  box-shadow: none;
   padding: 0;
+  min-height: 0;
   text-align: left;
   color: inherit;
-  min-height: 0;
+}
+
+.linkish:active:not(:disabled) {
+  box-shadow: none;
+  opacity: 0.7;
 }
 
 .buttons {
@@ -128,7 +491,7 @@ button.danger {
 }
 
 .filter {
-  margin: 8px 0 12px;
+  margin: 4px 0 12px;
 }
 
 .chips {
@@ -139,19 +502,20 @@ button.danger {
 }
 
 .chip {
-  padding: 6px 10px;
+  padding: 5px 10px;
   min-height: 36px;
   font-size: 13px;
-  border-radius: 999px;
+  border-radius: var(--radius);
   background: var(--surface);
 }
 
 .chip-on {
-  background: var(--accent-dim);
+  background: var(--accent-soft);
   border-color: var(--accent);
+  box-shadow: var(--bevel-in);
 }
 
-/* --- lists ------------------------------------------------------------ */
+/* --- lists --------------------------------------------------------------- */
 
 .list,
 .sublist {
@@ -164,28 +528,33 @@ button.danger {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 10px 12px;
+  padding: 11px 13px;
   margin-bottom: 8px;
   background: var(--surface);
+  border: var(--border-w) solid var(--line);
   border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
 }
 
 .row-main {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 3px;
   color: inherit;
   text-decoration: none;
   background: none;
   border: none;
+  box-shadow: none;
   padding: 0;
-  text-align: left;
   min-height: 0;
+  text-align: left;
 }
 
 .row-title {
   font-weight: 600;
+  overflow-wrap: anywhere;
 }
 
 .row-meta {
@@ -199,10 +568,11 @@ button.danger {
 .row-action {
   flex: none;
   font-size: 14px;
+  padding: 8px 12px;
 }
 
 .group {
-  margin-bottom: 16px;
+  margin-bottom: 18px;
 }
 
 .group h3 {
@@ -211,130 +581,198 @@ button.danger {
 }
 
 .nested {
-  margin-top: 8px;
+  margin-top: 10px;
 }
 
 .typemark {
-  color: var(--muted);
-  margin-right: 4px;
+  color: var(--text-dim);
+  margin-right: 5px;
 }
 
-/* --- badges and pills -------------------------------------------------- */
+/* --- badges -------------------------------------------------------------- */
 
 .badge {
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.04em;
   padding: 2px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   background: var(--surface-2);
-  color: var(--muted);
+  color: var(--text-dim);
+  border: var(--border-w) solid var(--line);
   white-space: nowrap;
-}
-
-.badge-uhs {
-  background: #3b2f52;
-  color: #d3b8ff;
-}
-.badge-ifarchive {
-  background: #23404a;
-  color: #9fe2f5;
-}
-.badge-ifdb {
-  background: #4a3a23;
-  color: #f5d59f;
-}
-.badge-strategywiki {
-  background: #24432c;
-  color: #a8e6ba;
 }
 
 .pill {
   font-size: 11px;
   padding: 2px 8px;
-  border-radius: 999px;
-  border: 1px solid var(--accent-dim);
-  color: var(--muted);
+  border-radius: var(--radius);
+  border: 1px solid var(--line);
+  color: var(--text-dim);
 }
 
 .pill-offline {
   color: var(--ok);
-  border-color: #2f4a24;
+  border-color: currentColor;
 }
 
-/* --- reader ------------------------------------------------------------ */
+/* --- reader --------------------------------------------------------------- */
 
-.reader-head {
-  margin-bottom: 8px;
+.reader {
+  font-family: var(--font-read);
+}
+
+.reader-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: -12px -16px 12px;
+  padding: 8px 16px;
+  background: var(--page);
+  border-bottom: 1px solid var(--line);
+}
+
+.reader-bar .back {
+  flex: none;
+  padding: 6px 10px;
+  min-height: 38px;
+}
+
+.reader-where {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: var(--text-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reader-bar .icon {
+  flex: none;
+  min-height: 38px;
+  padding: 6px 10px;
 }
 
 .crumbs {
   font-size: 13px;
-  color: var(--muted);
-  margin: 0 0 6px;
-  word-break: break-word;
+  color: var(--text-dim);
+  margin: 0 0 10px;
+  overflow-wrap: anywhere;
 }
 
-.crumbs a,
-.crumbs .linkish {
+.crumbs .linkish,
+.crumbs a {
   color: var(--accent);
   text-decoration: none;
 }
 
+.doc-meta {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+  margin: 0 0 10px;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
 .question {
-  font-size: 19px;
-  margin: 12px 0;
+  font-size: calc(var(--size-read) + 3px);
+  line-height: 1.35;
+  margin: 6px 0 16px;
+  max-width: 40ch;
 }
 
 .hint-list {
   list-style: none;
-  margin: 0 0 16px;
+  margin: 0 0 18px;
   padding: 0;
-  counter-reset: hint;
 }
 
 .hint {
   display: flex;
-  gap: 10px;
-  padding: 12px;
-  margin-bottom: 8px;
+  gap: 12px;
+  padding: 13px;
+  margin-bottom: 10px;
   background: var(--surface);
-  border-left: 3px solid var(--accent-dim);
-  border-radius: 0 var(--radius) var(--radius) 0;
+  border: var(--border-w) solid var(--line);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--card-shadow);
+  animation: hint-in 0.18s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .hint {
+    animation: none;
+  }
+  .app-header,
+  .tabbar {
+    transition: none;
+  }
+}
+
+@keyframes hint-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
 }
 
 .hint-number {
-  color: var(--muted);
+  color: var(--text-dim);
   font-variant-numeric: tabular-nums;
+  font-size: 13px;
+  padding-top: 2px;
   flex: none;
 }
 
 .hint-body {
   flex: 1;
   min-width: 0;
+  font-size: var(--size-read);
+  line-height: 1.6;
 }
 
 .reveal {
   width: 100%;
-  background: var(--accent-dim);
+  background: var(--accent-soft);
   border-color: var(--accent);
+  color: var(--text);
   font-weight: 600;
+  min-height: 52px;
 }
 
 .runs {
   margin: 0;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
+  max-width: 68ch;
 }
 
 .mono {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-family: var(--font-mono);
   font-size: 0.92em;
   white-space: pre;
   display: inline-block;
   max-width: 100%;
   overflow-x: auto;
   vertical-align: top;
+}
+
+.textnode h2,
+.imagenode h2 {
+  font-size: calc(var(--size-read) + 2px);
+  margin: 6px 0 12px;
+}
+
+.textnode .runs {
+  font-size: var(--size-read);
+  line-height: 1.6;
 }
 
 .image-frame {
@@ -347,39 +785,40 @@ button.danger {
   display: block;
   max-width: 100%;
   height: auto;
-  border-radius: var(--radius);
+  border-radius: var(--radius-sm);
   background: #fff;
 }
 
-/* Hotspots are outlined rather than invisible: an unmarked tappable region on
-   a map is a guessing game. */
+/* Outlined rather than invisible: an unmarked tappable region on a map is a
+   guessing game. */
 .hotspot {
   position: absolute;
   min-height: 0;
   padding: 0;
-  background: rgba(122, 162, 247, 0.15);
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
   border: 1px solid var(--accent);
-  border-radius: 3px;
+  border-radius: 2px;
+  box-shadow: none;
 }
 
 .hotspot:hover,
 .hotspot:focus-visible {
-  background: rgba(122, 162, 247, 0.35);
+  background: color-mix(in srgb, var(--accent) 38%, transparent);
 }
 
 .find-results {
   margin-bottom: 12px;
 }
 
-/* --- misc -------------------------------------------------------------- */
+/* --- notes and states ----------------------------------------------------- */
 
 .muted {
-  color: var(--muted);
+  color: var(--text-dim);
   font-size: 14px;
 }
 
 .footnote {
-  margin-top: 16px;
+  margin-top: 18px;
 }
 
 .error {
@@ -389,19 +828,20 @@ button.danger {
 
 .attribution {
   font-size: 12px;
-  color: var(--muted);
+  color: var(--text-dim);
 }
 
 .warnings {
   font-size: 12px;
-  color: #e0af68;
+  color: var(--warn);
 }
 
 .warnings-box {
   background: var(--surface);
-  border-left: 3px solid #e0af68;
+  border: var(--border-w) solid var(--line);
+  border-left: 3px solid var(--warn);
   padding: 10px 12px;
-  border-radius: 0 var(--radius) var(--radius) 0;
+  border-radius: var(--radius-sm);
   margin-bottom: 12px;
   font-size: 13px;
 }
@@ -413,10 +853,11 @@ button.danger {
 
 .tip {
   background: var(--surface);
+  border: var(--border-w) solid var(--line);
   border-left: 3px solid var(--accent);
-  margin: 8px 16px;
-  padding: 10px 12px;
-  border-radius: 0 var(--radius) var(--radius) 0;
+  margin: 0 0 14px;
+  padding: 11px 13px;
+  border-radius: var(--radius-sm);
 }
 
 .tip p {
@@ -425,20 +866,18 @@ button.danger {
 }
 
 .empty {
-  padding: 24px 0;
+  padding: 20px 0;
 }
 
 .empty h2 {
   font-size: 18px;
+  margin-top: 0;
 }
 
-.empty a,
-a {
-  color: var(--accent);
-}
+/* --- settings -------------------------------------------------------------- */
 
 .settings section {
-  margin-bottom: 28px;
+  margin-bottom: 30px;
 }
 
 .settings h2 {
@@ -456,4 +895,66 @@ a {
 .toggle input {
   width: 20px;
   height: 20px;
+  accent-color: var(--accent);
+}
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 8px;
+}
+
+.theme-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 6px;
+  padding: 10px;
+  text-align: left;
+  background: var(--surface);
+  min-height: 0;
+}
+
+.theme-card[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: var(--bevel-in);
+}
+
+.theme-swatch {
+  display: flex;
+  width: 100%;
+  height: 26px;
+  border: 1px solid var(--line);
+  overflow: hidden;
+  border-radius: var(--radius-sm);
+}
+
+.theme-swatch span {
+  flex: 1;
+}
+
+.theme-name {
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.theme-note {
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.scale-row {
+  display: flex;
+  gap: 8px;
+}
+
+.scale-row button {
+  flex: 1;
+}
+
+.scale-row button[aria-pressed='true'] {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  box-shadow: var(--bevel-in);
 }

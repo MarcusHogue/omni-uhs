@@ -1,4 +1,4 @@
-# Hint Reader
+# Omni UHS
 
 A personal, spoiler-safe, **fully offline** game hint reader.
 
@@ -32,8 +32,11 @@ cp .env.example .env      # put your TS_AUTHKEY and a real contact address in it
 docker compose up -d --build
 ```
 
-The app appears at `https://hint-reader.<your-tailnet>.ts.net`. Requires
+The app appears at `https://omni-uhs.<your-tailnet>.ts.net`. Requires
 **MagicDNS** and **HTTPS certificates** enabled in the tailnet admin console.
+
+**Full instructions:** [docs/SETUP.md](docs/SETUP.md) ·
+**Synology NAS:** [docs/SYNOLOGY.md](docs/SYNOLOGY.md)
 
 ### On the phone: add it to the Home Screen
 
@@ -53,13 +56,31 @@ result in Settings.
 | **Search** | One box, fanned out across every source. Results group by title, so a game that exists in three places appears once with three badges. A source that is down produces a warning, not an error. |
 | **Browse** | Per-source drill-down: the UHS A–Z index, IF Archive paths, StrategyWiki page prefixes. |
 | **Reader** | Subject tree, tap-to-reveal-one-hint-at-a-time, monospace runs, embedded images with tappable hotspots, internal links. Reveal state persists per document. |
-| **Settings** | Storage usage and durability, registration-gated-hint toggle, library export/import. |
+| **Settings** | Themes, text size, storage usage and durability, registration-gated-hint toggle, library export/import. |
 
 **Spoiler safety is structural.** Hint *n+1* is not rendered until hint *n* has
 been revealed by an explicit tap — not hidden with CSS, not rendered off-screen:
 absent from the DOM. The reader's find field searches section and question
 titles only, never hint bodies, because a search that surfaces answers is a
 search that spoils.
+
+**The interface gets out of the way.** One line of header, one row of tabs, and
+both slide off as soon as you scroll into a hint. In the reader there is a
+single bar — back, where you are, find — and the breadcrumb trail and source
+attribution stay folded behind it until you ask.
+
+## Themes
+
+Eight of them, in Settings. `Auto`, `Dark` and `Light` are the modern set; then
+there is **Windows 95**, **Windows 3.1**, **System 7**, **Mac OS 9**, **Amiga
+Workbench 1.3** and **DOS**.
+
+The retro themes are colour, type and chrome only — a theme is a block of CSS
+variables and nothing else, so it cannot change where you tap or how large the
+text is. Each one keeps the reading surface as a *window* on the desktop
+pattern, which is both what those systems actually did and the reason black
+Amiga text never ends up on Amiga blue. Text size is a separate setting, so
+Workbench at 20px is as readable as anything else.
 
 ---
 
@@ -80,6 +101,8 @@ web/                    React + TypeScript + Vite PWA
 proxy/                  Node 22 + Fastify: caching, allowlisting, catalogues
 docker-compose.yml      ts-sidecar + web + proxy (tailnet)
 docker-compose.local.yml  web + proxy on localhost
+docs/SETUP.md           running it locally and on a tailnet
+docs/SYNOLOGY.md        running it on a Synology NAS
 ```
 
 ### The parser is deliberately isolated
@@ -170,6 +193,8 @@ implemented — all-rights-reserved or ToS-restricted.
 ---
 
 ## Operations
+
+See [docs/SETUP.md](docs/SETUP.md) for the full runbook.
 
 - **Updates:** GitHub Actions publishes to GHCR on push to `main`; on the host,
   `docker compose pull && docker compose up -d`.

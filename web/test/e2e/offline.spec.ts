@@ -45,7 +45,7 @@ async function drillToFirstQuestion(page: Page): Promise<void> {
   throw new Error('no question found within 8 levels');
 }
 
-async function downloadFirstResult(page: Page, query: string): Promise<string> {
+async function downloadFirstResult(page: Page, query: string): Promise<void> {
   await page.getByRole('navigation').getByRole('link', { name: 'Search' }).click();
   const box = page.getByLabel('Search for a game');
   await box.fill(query);
@@ -60,9 +60,7 @@ async function downloadFirstResult(page: Page, query: string): Promise<string> {
 
   // A successful download navigates into the reader.
   await expect(page).toHaveURL(/#\/read\//, { timeout: 120_000 });
-  const title = await page.locator('.crumbs strong').first().innerText();
   await page.getByRole('navigation').getByRole('link', { name: 'Library' }).click();
-  return title;
 }
 
 test('downloads two games, then reads both with the network off', async ({
@@ -153,6 +151,9 @@ test('in-document search never matches hint bodies', async ({ page }) => {
   await waitForServiceWorker(page);
   await downloadFirstResult(page, 'adventure 660');
   await page.locator('.row-main').first().click();
+
+  // Find is a button until you want it — the reader keeps one line of chrome.
+  await page.getByRole('button', { name: 'Find in this document' }).click();
 
   // A phrase that only ever appears inside an unrevealed hint body must not
   // produce a match, and must not appear anywhere in the DOM.

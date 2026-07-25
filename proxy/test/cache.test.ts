@@ -167,7 +167,7 @@ describe('cache', () => {
       return { body: 'ok' };
     });
     await cache.fetch({ url: upstream.url('/ua'), ttl: 60, allowlist: allow() });
-    expect(seen).toContain('HintReader/1.0');
+    expect(seen).toContain('OmniUHS/1.0');
   });
 
   it('streams large bodies without buffering them', async () => {

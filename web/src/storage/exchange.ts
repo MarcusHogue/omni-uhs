@@ -78,7 +78,7 @@ export interface ImportResult {
 export async function importLibrary(bytes: Uint8Array): Promise<ImportResult> {
   const files = unzipSync(bytes);
   const manifestRaw = files['manifest.json'];
-  if (!manifestRaw) throw new Error('Not a Hint Reader export: manifest.json is missing.');
+  if (!manifestRaw) throw new Error('Not an Omni UHS export: manifest.json is missing.');
 
   const manifest = JSON.parse(strFromU8(manifestRaw)) as ExportManifest;
   if (manifest.version !== EXPORT_VERSION) {

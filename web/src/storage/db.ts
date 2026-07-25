@@ -43,7 +43,7 @@ export interface RevealState {
   updatedAt: string;
 }
 
-interface HintReaderDB extends DBSchema {
+interface OmniUhsDB extends DBSchema {
   documents: {
     key: string;
     value: StoredDocument;
@@ -54,13 +54,13 @@ interface HintReaderDB extends DBSchema {
   settings: { key: string; value: unknown };
 }
 
-const DB_NAME = 'hint-reader';
+const DB_NAME = 'omni-uhs';
 const DB_VERSION = 1;
 
-let dbPromise: Promise<IDBPDatabase<HintReaderDB>> | null = null;
+let dbPromise: Promise<IDBPDatabase<OmniUhsDB>> | null = null;
 
-export function getDb(): Promise<IDBPDatabase<HintReaderDB>> {
-  dbPromise ??= openDB<HintReaderDB>(DB_NAME, DB_VERSION, {
+export function getDb(): Promise<IDBPDatabase<OmniUhsDB>> {
+  dbPromise ??= openDB<OmniUhsDB>(DB_NAME, DB_VERSION, {
     upgrade(db) {
       const documents = db.createObjectStore('documents', { keyPath: 'id' });
       documents.createIndex('by-title', 'normalizedTitle');

@@ -1,4 +1,4 @@
-# Hint Reader — tailnet deployment.
+# Omni UHS — tailnet deployment.
 #
 # Three containers, one network namespace. The Tailscale sidecar owns the
 # netns; `web` and `proxy` join it, which means they talk over 127.0.0.1 and
@@ -15,8 +15,8 @@
 services:
   ts-sidecar:
     image: tailscale/tailscale:stable
-    container_name: hint-reader-ts
-    hostname: hint-reader
+    container_name: omni-uhs-ts
+    hostname: omni-uhs
     restart: unless-stopped
     environment:
       TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env}
@@ -48,8 +48,8 @@ services:
     build:
       context: .
       dockerfile: proxy/Dockerfile
-    image: ghcr.io/marcushogue/hint-reader-proxy:latest
-    container_name: hint-reader-proxy
+    image: ghcr.io/marcushogue/omni-uhs-proxy:latest
+    container_name: omni-uhs-proxy
     restart: unless-stopped
     # Shares the sidecar's netns: no ports, no networks, reachable on loopback.
     network_mode: service:ts-sidecar
@@ -63,7 +63,7 @@ services:
       UPSTREAM_ALLOWLIST: ${UPSTREAM_ALLOWLIST:-uhs-hints.com,www.uhs-hints.com,strategywiki.org,www.strategywiki.org,ifdb.org,ifarchive.org,www.ifarchive.org}
       WIKI_ALLOWLIST: ${WIKI_ALLOWLIST:-}
       # Be honest about who is calling: put a real contact address here.
-      USER_AGENT: ${USER_AGENT:-HintReader/1.0 (+personal use; set USER_AGENT with a contact address)}
+      USER_AGENT: ${USER_AGENT:-OmniUHS/1.0 (+personal use; set USER_AGENT with a contact address)}
     volumes:
       - cache-data:/data/cache
     deploy:
@@ -80,8 +80,8 @@ services:
     build:
       context: .
       dockerfile: web/Dockerfile
-    image: ghcr.io/marcushogue/hint-reader-web:latest
-    container_name: hint-reader-web
+    image: ghcr.io/marcushogue/omni-uhs-web:latest
+    container_name: omni-uhs-web
     restart: unless-stopped
     network_mode: service:ts-sidecar
     depends_on:
