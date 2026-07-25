@@ -32,4 +32,10 @@ export interface SearchResponse {
   /** Names of sources that failed; the rest of the response is still valid. */
   warnings: string[];
   sources: SourceKind[];
+  /**
+   * Sources that refused the *server* with a bot challenge. The browser may
+   * still be able to reach them itself, so the client uses this to decide
+   * whether a direct, client-side retry is worth attempting.
+   */
+  challenged: SourceKind[];
 }

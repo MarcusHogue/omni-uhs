@@ -248,3 +248,57 @@ describe('cache directory permissions', () => {
     }
   });
 });
+
+describe('bot challenges', () => {
+  it('explains a Cloudflare challenge instead of reporting a bare 403', async () => {
+    upstream.on('/walled', () => ({
+      status: 403,
+      headers: { 'cf-mitigated': 'challenge' },
+      body: 'Just a moment...',
+    }));
+
+    await expect(
+      cache.fetch({ url: upstream.url('/walled'), ttl: 60, allowlist: allow() }),
+    ).rejects.toThrow(/Cloudflare managed challenge/);
+  });
+
+  it('flags it so the client can decide to try the site itself', async () => {
+    upstream.on('/walled', () => ({
+      status: 403,
+      headers: { 'cf-mitigated': 'challenge' },
+      body: 'Just a moment...',
+    }));
+
+    const error = await cache
+      .fetch({ url: upstream.url('/walled'), ttl: 60, allowlist: allow() })
+      .catch((caught: Error & { upstreamChallenge?: boolean }) => caught);
+    expect((error as { upstreamChallenge?: boolean }).upstreamChallenge).toBe(true);
+  });
+
+  it('leaves an ordinary 403 alone — not every refusal is a challenge', async () => {
+    upstream.on('/forbidden', () => ({ status: 403, body: 'no' }));
+
+    const error = await cache
+      .fetch({ url: upstream.url('/forbidden'), ttl: 60, allowlist: allow() })
+      .catch((caught: Error & { upstreamChallenge?: boolean }) => caught);
+    expect((error as Error).message).toBe('Upstream responded 403');
+    expect((error as { upstreamChallenge?: boolean }).upstreamChallenge).toBeUndefined();
+  });
+
+  it('still prefers a stale copy over an error when it has one', async () => {
+    let challenge = false;
+    upstream.on('/flaky', () =>
+      challenge
+        ? { status: 403, headers: { 'cf-mitigated': 'challenge' }, body: 'Just a moment...' }
+        : { body: 'the good stuff' },
+    );
+
+    const fresh = await cache.fetch({ url: upstream.url('/flaky'), ttl: 0, allowlist: allow() });
+    expect(await cache.readText(fresh)).toBe('the good stuff');
+
+    challenge = true;
+    const stale = await cache.fetch({ url: upstream.url('/flaky'), ttl: 0, allowlist: allow() });
+    expect(stale.fromCache).toBe(true);
+    expect(await cache.readText(stale)).toBe('the good stuff');
+  });
+});

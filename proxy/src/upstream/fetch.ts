@@ -22,6 +22,26 @@ export interface UpstreamRequest {
   accept?: string;
 }
 
+/**
+ * Explain a refusal that no amount of retrying will fix.
+ *
+ * Cloudflare's managed challenge (`cf-mitigated: challenge`) is a JavaScript +
+ * browser-fingerprint test. An HTTP client cannot pass it from any IP, with any
+ * User-Agent — verified against StrategyWiki with an honest UA, a browser UA, a
+ * full set of browser headers, and no UA at all. Saying "Upstream responded
+ * 403" invites the reader to go looking for a misconfiguration that is not
+ * there, so say what it actually is.
+ */
+export function describeUpstreamRejection(host: string, response: Response): string | null {
+  if (response.status !== 403) return null;
+  if (response.headers.get('cf-mitigated') !== 'challenge') return null;
+  return (
+    `${host} is behind a Cloudflare managed challenge, which only a real ` +
+    `browser can pass — a server cannot read it at all. This is the site ` +
+    `owner's setting, not a misconfiguration here.`
+  );
+}
+
 export class UpstreamError extends Error {
   constructor(
     message: string,

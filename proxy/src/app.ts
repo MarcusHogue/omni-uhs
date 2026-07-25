@@ -30,13 +30,18 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     }
   });
 
-  app.setErrorHandler((error: Error & { statusCode?: number }, request, reply) => {
-    const status =
-      error instanceof UpstreamRejected ? error.statusCode : (error.statusCode ?? 500);
-    if (status >= 500) request.log.error({ err: error }, 'request failed');
-    else request.log.warn({ err: error.message, url: request.url }, 'request rejected');
-    return reply.code(status).send({ error: error.message });
-  });
+  app.setErrorHandler(
+    (error: Error & { statusCode?: number; upstreamChallenge?: boolean }, request, reply) => {
+      const status =
+        error instanceof UpstreamRejected ? error.statusCode : (error.statusCode ?? 500);
+      if (status >= 500) request.log.error({ err: error }, 'request failed');
+      else request.log.warn({ err: error.message, url: request.url }, 'request rejected');
+      return reply.code(status).send({
+        error: error.message,
+        ...(error.upstreamChallenge ? { code: 'upstream_challenge' } : {}),
+      });
+    },
+  );
 
   app.get('/healthz', async () => ({ status: 'ok' }));
 

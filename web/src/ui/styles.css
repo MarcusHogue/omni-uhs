@@ -571,6 +571,31 @@ button.danger {
   padding: 8px 12px;
 }
 
+/* An <a> used as a row action — IFDB and other "go and look" sources — has to
+   carry the button chrome itself, since it is not a <button>. */
+a.row-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 44px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--line);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--bevel-out);
+  text-decoration: none;
+  white-space: nowrap;
+}
+
+a.row-action:active {
+  box-shadow: var(--bevel-in);
+}
+
+.link-out {
+  font-size: 13px;
+  color: var(--accent);
+}
+
 .group {
   margin-bottom: 18px;
 }
