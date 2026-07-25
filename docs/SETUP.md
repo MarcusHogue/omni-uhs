@@ -185,7 +185,8 @@ Pinning by SHA is worth doing on a NAS, where the UI has no "pull" button:
 changing the tag is the whole update, and it rolls back the same way.
 
 ```yaml
-image: ghcr.io/marcushogue/omni-uhs-web:a07c434
+# Any commit SHA from the Packages page; the short form works.
+image: ghcr.io/marcushogue/omni-uhs-web:1a2b3c4
 ```
 
 If you fork this and keep your own packages private, pulling needs a classic
