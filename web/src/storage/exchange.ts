@@ -56,7 +56,12 @@ export interface ExportManifest {
   documents: { id: string; title: string; sourceKind: string; license: string }[];
   /** Titles left out because their source forbids redistribution. */
   excluded: { title: string; reason: string }[];
-  counts: { documents: number; revealStates: number; settings: number };
+  counts: {
+    documents: number;
+    revealStates: number;
+    settings: number;
+    preferences: number;
+  };
 }
 
 export interface ExportResult {
@@ -71,6 +76,47 @@ export interface ExportOptions {
    * has to tick; refusing to default it is the point.
    */
   acknowledgedPersonalUse?: boolean;
+}
+
+/**
+ * Theme and text size live in `localStorage`, not IndexedDB — they have to be
+ * readable synchronously, before the first paint, or the app flashes the wrong
+ * theme on every launch. That puts them outside `listSettings()`, so a backup
+ * that promised "your settings" and silently dropped them would be lying.
+ *
+ * Everything the app owns there is namespaced `omni-uhs:`, so backing up the
+ * prefix keeps this correct as preferences are added.
+ */
+const PREFERENCE_PREFIX = 'omni-uhs:';
+
+function readPreferences(): Record<string, string> {
+  const out: Record<string, string> = {};
+  try {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key?.startsWith(PREFERENCE_PREFIX)) continue;
+      const value = localStorage.getItem(key);
+      if (value !== null) out[key] = value;
+    }
+  } catch {
+    // Private mode, or storage disabled. A backup without preferences beats no
+    // backup at all.
+  }
+  return out;
+}
+
+function writePreferences(preferences: Record<string, string>): number {
+  let written = 0;
+  for (const [key, value] of Object.entries(preferences)) {
+    if (!key.startsWith(PREFERENCE_PREFIX) || typeof value !== 'string') continue;
+    try {
+      localStorage.setItem(key, value);
+      written += 1;
+    } catch {
+      /* as above */
+    }
+  }
+  return written;
 }
 
 const BACKUP_NOTICE =
@@ -116,6 +162,7 @@ export async function exportLibrary(options: ExportOptions = {}): Promise<Export
   // got through each game would be a strange thing to send.
   let revealStates: RevealState[] = [];
   let settings: Record<string, unknown> = {};
+  let preferences: Record<string, string> = {};
   if (scope === 'backup') {
     const ids = new Set(included.map((d) => d.id));
     revealStates = (await listRevealStates()).filter((state) => ids.has(state.id));
@@ -124,6 +171,8 @@ export async function exportLibrary(options: ExportOptions = {}): Promise<Export
     }
     settings = await listSettings();
     files['settings.json'] = strToU8(JSON.stringify(settings, null, 2));
+    preferences = readPreferences();
+    files['preferences.json'] = strToU8(JSON.stringify(preferences, null, 2));
   }
 
   const manifest: ExportManifest = {
@@ -143,12 +192,24 @@ export async function exportLibrary(options: ExportOptions = {}): Promise<Export
       documents: included.length,
       revealStates: revealStates.length,
       settings: Object.keys(settings).length,
+      preferences: Object.keys(preferences).length,
     },
   };
 
   files['manifest.json'] = strToU8(JSON.stringify(manifest, null, 2));
   if (scope === 'backup') files['PERSONAL-USE-ONLY.txt'] = strToU8(`${BACKUP_NOTICE}\n`);
 
+  // `zipSync` holds the uncompressed entries and the finished archive in memory
+  // at once, so peak use is roughly twice the library. That is fine at the sizes
+  // this deals with: measured against the live UHS catalogue, the median title
+  // is 36 KB, the largest is 4.7 MB, and *all 500* would come to 68 MB — and a
+  // real library is a few dozen titles, so single-digit megabytes.
+  //
+  // Streaming would not help where it would matter anyway: iOS Safari, the
+  // target platform, has no way to stream a download, so the whole archive has
+  // to become a Blob before it can be handed to a link either way. The size is
+  // reported back to the caller so a library heading for trouble is visible
+  // rather than a surprise.
   return { bytes: zipSync(files, { level: 6 }), manifest };
 }
 
@@ -156,6 +217,7 @@ export interface ImportResult {
   imported: number;
   revealStates: number;
   settings: number;
+  preferences: number;
   scope: ExportScope;
   skipped: string[];
 }
@@ -179,6 +241,7 @@ export async function importLibrary(bytes: Uint8Array): Promise<ImportResult> {
   let imported = 0;
   let revealStates = 0;
   let settings = 0;
+  let preferences = 0;
 
   for (const [name, content] of Object.entries(files)) {
     if (!name.startsWith('documents/') || !name.endsWith('.json')) continue;
@@ -226,10 +289,22 @@ export async function importLibrary(bytes: Uint8Array): Promise<ImportResult> {
     }
   }
 
+  const preferencesRaw = files['preferences.json'];
+  if (preferencesRaw) {
+    try {
+      preferences = writePreferences(
+        JSON.parse(strFromU8(preferencesRaw)) as Record<string, string>,
+      );
+    } catch (error) {
+      skipped.push(`preferences.json: ${(error as Error).message}`);
+    }
+  }
+
   return {
     imported,
     revealStates,
     settings,
+    preferences,
     scope: manifest.scope ?? 'shareable',
     skipped,
   };

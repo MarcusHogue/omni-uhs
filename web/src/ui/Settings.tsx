@@ -67,20 +67,38 @@ export function Settings(): JSX.Element {
       const { counts } = result.manifest;
       setMessage(
         scope === 'backup'
-          ? `Backed up ${counts.documents} title(s), ${counts.revealStates} with reading progress.`
-          : `Exported ${counts.documents} title(s).`,
+          ? `Backed up ${counts.documents} title(s), ${counts.revealStates} with reading ` +
+              `progress — ${formatBytes(result.bytes.length)}.`
+          : `Exported ${counts.documents} title(s) — ${formatBytes(result.bytes.length)}.`,
       );
     } catch (error) {
       setMessage((error as Error).message);
     }
   };
 
+  /**
+   * Pull every value this screen displays back out of storage.
+   *
+   * An import can rewrite all of them underneath a mounted component. Leaving
+   * the checkbox showing its pre-import value is not just cosmetic: the next
+   * click would write the stale value back over what was just restored.
+   */
+  const refreshFromStorage = async (): Promise<void> => {
+    setEstimate(await storageEstimate());
+    setPersisted((await navigator.storage?.persisted?.()) ?? false);
+    setDecodeIncentive(await getSetting('decodeIncentive', false));
+    // Theme and text size come back via localStorage, so re-read and re-apply.
+    const restoredTheme = readTheme();
+    const restoredScale = readTextScale();
+    setTheme(restoredTheme);
+    setScale(restoredScale);
+    applyTheme(restoredTheme);
+    applyTextScale(restoredScale);
+  };
+
+  // Once on mount; `refreshFromStorage` is also called after an import.
   useEffect(() => {
-    void (async () => {
-      setEstimate(await storageEstimate());
-      setPersisted((await navigator.storage?.persisted?.()) ?? false);
-      setDecodeIncentive(await getSetting('decodeIncentive', false));
-    })();
+    void refreshFromStorage();
   }, []);
 
   const personalOnly = documents.filter((d) => d.personalUseOnly).length;
@@ -192,8 +210,8 @@ export function Settings(): JSX.Element {
         <h3>Full backup</h3>
         <p className="muted">
           Everything: every title, the original files, how far you have revealed each
-          set of hints, and your settings. This is what to take to a new phone, or to
-          keep before clearing site data.
+          set of hints, and your settings — including this theme and text size. This is
+          what to take to a new phone, or to keep before clearing site data.
         </p>
         <label className="toggle toggle-wrap">
           <input
@@ -260,11 +278,14 @@ export function Settings(): JSX.Element {
                 try {
                   const result = await importLibrary(new Uint8Array(await file.arrayBuffer()));
                   reload();
+                  await refreshFromStorage();
                   const parts = [`Imported ${result.imported} title(s)`];
                   if (result.revealStates > 0) {
                     parts.push(`${result.revealStates} with reading progress`);
                   }
-                  if (result.settings > 0) parts.push(`${result.settings} setting(s)`);
+                  if (result.settings + result.preferences > 0) {
+                    parts.push(`${result.settings + result.preferences} setting(s)`);
+                  }
                   if (result.skipped.length > 0) {
                     parts.push(`skipped ${result.skipped.length}`);
                   }

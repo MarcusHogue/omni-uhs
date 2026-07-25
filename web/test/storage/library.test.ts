@@ -8,7 +8,7 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { HintDocument } from '../../src/parser/ast.js';
 import { parseUhs } from '../../src/parser/uhs/index.js';
@@ -245,12 +245,53 @@ describe('full backup', () => {
     expect((await getRevealState(uhs.id)).revealed['uhs:12']).toBe(6);
   });
 
+  it('carries device preferences that live outside IndexedDB', async () => {
+    // These tests run in Node, which has no localStorage. The production code
+    // guards for that (private mode disables it too), so a stub is needed to
+    // exercise the path at all.
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      get length() {
+        return store.size;
+      },
+      key: (i: number) => [...store.keys()][i] ?? null,
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    });
+
+    // Theme and text size are in localStorage, so `listSettings()` never sees
+    // them; a backup that promised "your settings" and dropped them would lie.
+    localStorage.setItem('omni-uhs:theme', 'workbench');
+    localStorage.setItem('omni-uhs:text-scale', 'large');
+    localStorage.setItem('unrelated-app:key', 'left alone');
+    await putDocument(stored(wikiDocument()));
+
+    const { bytes, manifest } = await exportLibrary({
+      scope: 'backup',
+      acknowledgedPersonalUse: true,
+    });
+    expect(manifest.counts.preferences).toBe(2);
+
+    localStorage.setItem('omni-uhs:theme', 'dos');
+    localStorage.removeItem('omni-uhs:text-scale');
+
+    const result = await importLibrary(bytes);
+    expect(result.preferences).toBe(2);
+    expect(localStorage.getItem('omni-uhs:theme')).toBe('workbench');
+    expect(localStorage.getItem('omni-uhs:text-scale')).toBe('large');
+    // Only our namespace is touched.
+    expect(localStorage.getItem('unrelated-app:key')).toBe('left alone');
+    vi.unstubAllGlobals();
+  });
+
   it('leaves reveal state and settings out of a shareable export', async () => {
     await putDocument(stored(wikiDocument()));
     await setRevealed(wikiDocument().id, 'p:0', 2);
     const { manifest } = await exportLibrary();
     expect(manifest.scope).toBe('shareable');
     expect(manifest.counts.revealStates).toBe(0);
+    expect(manifest.counts.preferences).toBe(0);
     expect(manifest.containsPersonalUseOnly).toBe(false);
   });
 });
