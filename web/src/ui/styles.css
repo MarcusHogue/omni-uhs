@@ -1,0 +1,436 @@
+/* Phone-first, dark, and deliberately plain: the content is the point. */
+
+:root {
+  --bg: #12141c;
+  --surface: #1b1e29;
+  --surface-2: #232736;
+  --text: #e8eaf2;
+  --muted: #949cb5;
+  --accent: #7aa2f7;
+  --accent-dim: #33406b;
+  --danger: #f7768e;
+  --ok: #9ece6a;
+  --radius: 10px;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 16px/1.5 -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  overscroll-behavior-y: none;
+}
+
+.app {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: max(12px, env(safe-area-inset-top)) 16px 8px;
+}
+
+.app-header h1 {
+  font-size: 18px;
+  margin: 0;
+  letter-spacing: 0.01em;
+}
+
+.app-main {
+  flex: 1;
+  padding: 8px 16px 88px;
+}
+
+.tabbar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  background: var(--surface);
+  border-top: 1px solid #000;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.tabbar a {
+  padding: 14px 4px;
+  text-align: center;
+  color: var(--muted);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.tabbar a.active {
+  color: var(--accent);
+  background: var(--surface-2);
+}
+
+/* --- controls --------------------------------------------------------- */
+
+input[type='search'],
+input[type='text'] {
+  width: 100%;
+  padding: 12px 14px;
+  font-size: 16px; /* < 16px makes iOS zoom on focus */
+  border-radius: var(--radius);
+  border: 1px solid #000;
+  background: var(--surface);
+  color: var(--text);
+}
+
+button {
+  font: inherit;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid #000;
+  border-radius: var(--radius);
+  padding: 10px 14px;
+  cursor: pointer;
+  min-height: 44px; /* comfortable tap target */
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+button.danger {
+  color: var(--danger);
+}
+
+.linkish {
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  color: inherit;
+  min-height: 0;
+}
+
+.buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.filter {
+  margin: 8px 0 12px;
+}
+
+.chips {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 12px;
+}
+
+.chip {
+  padding: 6px 10px;
+  min-height: 36px;
+  font-size: 13px;
+  border-radius: 999px;
+  background: var(--surface);
+}
+
+.chip-on {
+  background: var(--accent-dim);
+  border-color: var(--accent);
+}
+
+/* --- lists ------------------------------------------------------------ */
+
+.list,
+.sublist {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 12px;
+  margin-bottom: 8px;
+  background: var(--surface);
+  border-radius: var(--radius);
+}
+
+.row-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  color: inherit;
+  text-decoration: none;
+  background: none;
+  border: none;
+  padding: 0;
+  text-align: left;
+  min-height: 0;
+}
+
+.row-title {
+  font-weight: 600;
+}
+
+.row-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 13px;
+}
+
+.row-action {
+  flex: none;
+  font-size: 14px;
+}
+
+.group {
+  margin-bottom: 16px;
+}
+
+.group h3 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.nested {
+  margin-top: 8px;
+}
+
+.typemark {
+  color: var(--muted);
+  margin-right: 4px;
+}
+
+/* --- badges and pills -------------------------------------------------- */
+
+.badge {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.badge-uhs {
+  background: #3b2f52;
+  color: #d3b8ff;
+}
+.badge-ifarchive {
+  background: #23404a;
+  color: #9fe2f5;
+}
+.badge-ifdb {
+  background: #4a3a23;
+  color: #f5d59f;
+}
+.badge-strategywiki {
+  background: #24432c;
+  color: #a8e6ba;
+}
+
+.pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--accent-dim);
+  color: var(--muted);
+}
+
+.pill-offline {
+  color: var(--ok);
+  border-color: #2f4a24;
+}
+
+/* --- reader ------------------------------------------------------------ */
+
+.reader-head {
+  margin-bottom: 8px;
+}
+
+.crumbs {
+  font-size: 13px;
+  color: var(--muted);
+  margin: 0 0 6px;
+  word-break: break-word;
+}
+
+.crumbs a,
+.crumbs .linkish {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+.question {
+  font-size: 19px;
+  margin: 12px 0;
+}
+
+.hint-list {
+  list-style: none;
+  margin: 0 0 16px;
+  padding: 0;
+  counter-reset: hint;
+}
+
+.hint {
+  display: flex;
+  gap: 10px;
+  padding: 12px;
+  margin-bottom: 8px;
+  background: var(--surface);
+  border-left: 3px solid var(--accent-dim);
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.hint-number {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  flex: none;
+}
+
+.hint-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.reveal {
+  width: 100%;
+  background: var(--accent-dim);
+  border-color: var(--accent);
+  font-weight: 600;
+}
+
+.runs {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.92em;
+  white-space: pre;
+  display: inline-block;
+  max-width: 100%;
+  overflow-x: auto;
+  vertical-align: top;
+}
+
+.imagenode img {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius);
+  background: #fff;
+}
+
+.find-results {
+  margin-bottom: 12px;
+}
+
+/* --- misc -------------------------------------------------------------- */
+
+.muted {
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.footnote {
+  margin-top: 16px;
+}
+
+.error {
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.attribution {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.warnings {
+  font-size: 12px;
+  color: #e0af68;
+}
+
+.warnings-box {
+  background: var(--surface);
+  border-left: 3px solid #e0af68;
+  padding: 10px 12px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin-bottom: 12px;
+  font-size: 13px;
+}
+
+.warnings-box ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
+}
+
+.tip {
+  background: var(--surface);
+  border-left: 3px solid var(--accent);
+  margin: 8px 16px;
+  padding: 10px 12px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.tip p {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.empty {
+  padding: 24px 0;
+}
+
+.empty h2 {
+  font-size: 18px;
+}
+
+.empty a,
+a {
+  color: var(--accent);
+}
+
+.settings section {
+  margin-bottom: 28px;
+}
+
+.settings h2 {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 0;
+}
+
+.toggle input {
+  width: 20px;
+  height: 20px;
+}

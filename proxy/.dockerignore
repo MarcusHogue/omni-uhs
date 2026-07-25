@@ -1,0 +1,14 @@
+node_modules
+**/node_modules
+**/dist
+**/dev-dist
+**/coverage
+.git
+.github
+data
+**/test/fixtures/real
+**/*.log
+.env
+.env.*
+playwright-report
+test-results
