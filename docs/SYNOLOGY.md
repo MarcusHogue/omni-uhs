@@ -89,12 +89,12 @@ services:
       CACHE_DIR: /data/cache
       # Put a real contact address here: it is sent to every upstream.
       USER_AGENT: "OmniUHS/1.0 (+personal use; you@example.com)"
+      # info is one line per request plus every upstream fetch, catalog refresh
+      # and search. debug adds cache hits and misses.
+      LOG_LEVEL: info
     volumes:
       - /volume1/docker/omni-uhs/cache:/data/cache
     networks: [omni]
-    logging:
-      driver: json-file
-      options: { max-size: 10m, max-file: "3" }
 
   web:
     image: ghcr.io/marcushogue/omni-uhs-web:latest
@@ -106,9 +106,6 @@ services:
       - "8081:80"
     depends_on: [proxy]
     networks: [omni]
-    logging:
-      driver: json-file
-      options: { max-size: 10m, max-file: "3" }
 
 networks:
   omni:
@@ -116,6 +113,14 @@ networks:
 
 Click through to **Done**; Container Manager pulls the images and starts both
 containers.
+
+> **Do not add a `logging:` block here**, even though the repo's own compose
+> files have one. Synology's Container Manager ships its own log driver and the
+> **Log** tab reads from that alone; pinning `driver: json-file` sends the
+> output somewhere the GUI cannot see, and the tab reports *No logs available*
+> while `sudo docker logs` still works fine over SSH. Leaving `logging:` out
+> lets both work. DSM handles the rotation the repo's compose files configure
+> by hand.
 
 > The published packages are public, so no registry login is needed. If you
 > fork this and keep your own packages private, log the NAS in once over SSH
@@ -253,6 +258,21 @@ sudo docker restart omni-uhs-proxy
 
 Prefer `chown` over `chmod 777`: it grants exactly the one account that needs
 it, and survives DSM's periodic permission tidying.
+
+**The Log tab says "No logs available" while the container is healthy.** The
+container is logging; the GUI is looking somewhere else. Container Manager reads
+from Synology's own log driver, so a `logging:` block in the compose file that
+pins `driver: json-file` sends the output past it. Check which driver is in use,
+and whether the logs exist at all:
+
+```bash
+sudo docker inspect -f '{{.Name}} {{.HostConfig.LogConfig.Type}}' omni-uhs-proxy omni-uhs-web
+sudo docker logs --tail 20 omni-uhs-proxy
+```
+
+If that prints `json-file` and `docker logs` shows output, the fix is to delete
+the `logging:` block from both services in the project's compose file and rebuild
+the project. DSM handles rotation itself.
 
 **Container Manager shows the project as "unhealthy".** Both images have
 healthchecks; `sudo docker compose logs proxy` will say why. The usual cause is
