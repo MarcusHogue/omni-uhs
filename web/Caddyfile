@@ -1,0 +1,64 @@
+# Serves the built PWA and reverse-proxies the API.
+#
+# The cache headers here are load-bearing. Get them wrong and either the app
+# never updates (a pinned service worker) or it re-downloads everything on each
+# launch (no immutable assets) — both fatal for an offline-first reader.
+
+:80 {
+	root * /srv
+
+	encode zstd gzip
+
+	# Never cache the entry points. index.html and the service worker are how a
+	# new build reaches an installed app; a stale copy strands the user on an
+	# old version forever.
+	@nostore {
+		path /sw.js /registerSW.js /index.html / /manifest.webmanifest
+	}
+	header @nostore Cache-Control "no-cache, no-store, must-revalidate"
+	header @nostore Pragma "no-cache"
+
+	# Content-hashed assets can be cached forever, because a change to any of
+	# them changes its filename.
+	@immutable {
+		path /assets/* /workbox-*.js
+	}
+	header @immutable Cache-Control "public, max-age=31536000, immutable"
+
+	header /manifest.webmanifest Content-Type "application/manifest+json"
+
+	# Icons change rarely; a day is plenty.
+	@icons path /icons/*
+	header @icons Cache-Control "public, max-age=86400"
+
+	header {
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		# Personal use only: never let this page be framed elsewhere.
+		X-Frame-Options "DENY"
+		-Server
+	}
+
+	# In the tailnet stack the proxy shares this container's network namespace,
+	# so it answers on loopback. The local stack overrides API_UPSTREAM to reach
+	# it by service name across a bridge network instead.
+	handle /api/* {
+		reverse_proxy {$API_UPSTREAM:127.0.0.1:8080} {
+			transport http {
+				# Hint files can be several megabytes; give the upstream room.
+				response_header_timeout 120s
+			}
+		}
+	}
+
+	handle /healthz {
+		respond "ok" 200
+	}
+
+	# SPA fallback. The app uses hash routing, so this mostly matters for the
+	# very first load and for anything the service worker misses.
+	handle {
+		try_files {path} /index.html
+		file_server
+	}
+}

@@ -1,0 +1,39 @@
+{
+  "name": "@omni-uhs/web",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -p tsconfig.json --noEmit && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:e2e": "playwright test",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "lint": "eslint src test tools",
+    "dump": "tsx tools/dump-ast.ts",
+    "fixtures": "tsx tools/make-fixtures.ts",
+    "fetch-fixtures": "tsx tools/fetch-fixtures.ts"
+  },
+  "dependencies": {
+    "fflate": "^0.8.2",
+    "idb": "^8.0.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.48.0",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.2",
+    "fake-indexeddb": "^6.2.5",
+    "tsx": "^4.19.1",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.8",
+    "vite-plugin-pwa": "^0.20.5",
+    "vitest": "^2.1.2",
+    "workbox-window": "^7.1.0"
+  }
+}
