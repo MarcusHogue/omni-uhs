@@ -6,6 +6,7 @@ import {
   isOfflineError,
   type CatalogEntry,
   strategyWikiPageUrl,
+  strategyWikiSearchUrl,
   type CatalogGroup,
   type SourceInfo,
 } from '../api/client';
@@ -45,6 +46,15 @@ export function Search(): JSX.Element {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [searching, setSearching] = useState(false);
+  /**
+   * Set when neither the proxy nor this browser could reach StrategyWiki.
+   *
+   * At that point there are no StrategyWiki rows to link out from, so without
+   * this the user gets a paragraph of explanation and no way forward. A
+   * navigation is the one request Cloudflare will issue a solvable challenge
+   * for, so hand them one.
+   */
+  const [challengeLink, setChallengeLink] = useState<string | null>(null);
 
   const debounced = useDebounced(query, DEBOUNCE_MS);
   const runLatest = useLatest();
@@ -84,10 +94,12 @@ export function Search(): JSX.Element {
       setGroups([]);
       setWarnings([]);
       setError(null);
+      setChallengeLink(null);
       return;
     }
     setSearching(true);
     setError(null);
+    setChallengeLink(null);
     runLatest(async (signal) => {
       try {
         const response = await api.search(trimmed, selected, signal);
@@ -104,9 +116,13 @@ export function Search(): JSX.Element {
               setGroups((current) => mergeEntries(current, direct));
               setWarnings((current) => current.filter((w) => !w.startsWith('strategywiki:')));
             }
-          } catch {
-            // Challenged here too. The warning the server already produced
-            // explains it, and each row still links out to the page.
+          } catch (caught) {
+            // Challenged here too: no rows, so nothing to link out from. Offer
+            // the site's own search page — opening it is a navigation, which is
+            // the only kind of request a person can pass a challenge on.
+            if ((caught as Error).name !== 'AbortError') {
+              setChallengeLink(strategyWikiSearchUrl(trimmed));
+            }
           }
         }
       } catch (caught) {
@@ -178,6 +194,15 @@ export function Search(): JSX.Element {
       {searching && <Spinner label="Searching…" />}
       {error && <ErrorNote error={error} />}
       <Warnings warnings={warnings} />
+      {challengeLink && (
+        <p className="muted">
+          <a className="link-out" href={challengeLink} target="_blank" rel="noreferrer noopener">
+            Search StrategyWiki directly ↗
+          </a>{' '}
+          — opening the site yourself is the one request its bot check will let you
+          through.
+        </p>
+      )}
 
       <ul className="list">
         {groups.map((group) => (

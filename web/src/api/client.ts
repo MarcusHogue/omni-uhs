@@ -99,6 +99,17 @@ export function strategyWikiPageUrl(ref: string): string {
 }
 
 /**
+ * StrategyWiki's own search page.
+ *
+ * The last resort when neither the proxy nor a background fetch can reach the
+ * site: a *navigation* is the one request Cloudflare will issue an interactive
+ * challenge for, and the one a person can actually complete.
+ */
+export function strategyWikiSearchUrl(query: string): string {
+  return `https://strategywiki.org/w/index.php?search=${encodeURIComponent(query)}`;
+}
+
+/**
  * Query StrategyWiki from the browser instead of through the proxy.
  *
  * Cloudflare's managed challenge cannot be "handed to the user" in the way it

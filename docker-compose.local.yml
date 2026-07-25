@@ -20,6 +20,13 @@ services:
       PORT: 8080
       HOST: 0.0.0.0
       CACHE_DIR: /data/cache
+      # Everything .env.example documents has to be forwarded explicitly:
+      # Compose reads .env for interpolation only, so a variable that is not
+      # named here never reaches the container and the setting silently does
+      # nothing.
+      UPSTREAM_ALLOWLIST: ${UPSTREAM_ALLOWLIST:-uhs-hints.com,www.uhs-hints.com,strategywiki.org,www.strategywiki.org,ifdb.org,ifarchive.org,www.ifarchive.org}
+      WIKI_ALLOWLIST: ${WIKI_ALLOWLIST:-}
+      SEARCH_SOURCES: ${SEARCH_SOURCES:-uhs,ifarchive,ifdb}
       USER_AGENT: ${USER_AGENT:-OmniUHS/1.0 (+personal use; local development)}
     volumes:
       - cache-data:/data/cache

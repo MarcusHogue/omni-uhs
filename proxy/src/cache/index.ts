@@ -67,6 +67,19 @@ CREATE TABLE IF NOT EXISTS catalog_state (
 `;
 
 /**
+ * Codes that mean "the cache directory is not writable by this user".
+ *
+ * `mkdirSync(…, { recursive: true })` succeeds silently when the directory
+ * already exists, so a bind mount that was pre-created on the host — or
+ * restored from a backup — sails past the mkdir and fails later, when SQLite
+ * tries to create `index.sqlite` or its WAL. better-sqlite3 reports that as
+ * SQLITE_CANTOPEN/SQLITE_READONLY rather than EACCES, and by the time we get
+ * there the directory demonstrably exists, so a permission problem is what it
+ * is.
+ */
+const UNWRITABLE = new Set(['EACCES', 'EPERM', 'SQLITE_CANTOPEN', 'SQLITE_READONLY']);
+
+/**
  * Turn an unwritable cache directory into an instruction.
  *
  * The container runs as the distroless `nonroot` user (uid 65532). The image
@@ -77,10 +90,10 @@ CREATE TABLE IF NOT EXISTS catalog_state (
  * exactly where people use bind mounts.
  */
 export function describeCacheDirFailure(dir: string, error: NodeJS.ErrnoException): Error {
-  if (error.code !== 'EACCES' && error.code !== 'EPERM') return error;
+  if (!UNWRITABLE.has(error.code ?? '')) return error;
   const uid = typeof process.getuid === 'function' ? process.getuid() : 'the container user';
   return new Error(
-    `Cannot write to CACHE_DIR (${dir}): ${error.code}.\n` +
+    `Cannot write to CACHE_DIR (${dir}): ${error.code}${error.code?.startsWith('SQLITE') ? ` (${error.message})` : ''}.\n` +
       `\n` +
       `This container runs as uid ${uid}. If ${dir} is a bind mount from the host,\n` +
       `give that user ownership of the host directory:\n` +
@@ -100,16 +113,19 @@ export class Cache {
 
   constructor(dir: string = config.cacheDir) {
     this.blobDir = join(dir, 'blobs');
+    // Opening the database belongs inside this guard: when the directories
+    // already exist but are not writable, mkdir succeeds and SQLite is the
+    // first thing that actually fails.
     try {
       mkdirSync(dir, { recursive: true });
       mkdirSync(this.blobDir, { recursive: true });
+      this.db = new Database(join(dir, 'index.sqlite'));
+      this.db.pragma('journal_mode = WAL');
+      this.db.pragma('synchronous = NORMAL');
+      this.db.exec(SCHEMA);
     } catch (error) {
       throw describeCacheDirFailure(dir, error as NodeJS.ErrnoException);
     }
-    this.db = new Database(join(dir, 'index.sqlite'));
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('synchronous = NORMAL');
-    this.db.exec(SCHEMA);
   }
 
   close(): void {

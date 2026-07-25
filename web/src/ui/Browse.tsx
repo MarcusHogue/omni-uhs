@@ -1,7 +1,12 @@
 import { useEffect, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import { api, isOfflineError, type CatalogEntry } from '../api/client';
+import {
+  api,
+  isOfflineError,
+  strategyWikiSearchUrl,
+  type CatalogEntry,
+} from '../api/client';
 import { getSetting } from '../storage/db';
 import { downloadEntry } from '../storage/download';
 import { ErrorNote, SourceBadge, Spinner, Warnings } from './bits';
@@ -58,6 +63,7 @@ function SourceListing({ source }: { source: string }): JSX.Element {
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [challengeLink, setChallengeLink] = useState<string | null>(null);
   const runLatest = useLatest();
   const { documents, reload } = useLibrary();
   const offlineRefs = useOfflineRefs(documents);
@@ -72,6 +78,7 @@ function SourceListing({ source }: { source: string }): JSX.Element {
     }
     setLoading(true);
     setError(null);
+    setChallengeLink(null);
     runLatest(async (signal) => {
       try {
         const response = await api.list(source, prefix, signal);
@@ -85,8 +92,13 @@ function SourceListing({ source }: { source: string }): JSX.Element {
             const direct = await api.listStrategyWikiDirect(prefix, signal);
             setEntries(direct);
             setWarnings([]);
-          } catch {
-            // Challenged here too; the server's warning already says so.
+          } catch (caught) {
+            // Challenged here too, and there are no rows to link out from, so
+            // offer the site's own search — a navigation is the only request a
+            // person can actually pass a bot check on.
+            if ((caught as Error).name !== 'AbortError') {
+              setChallengeLink(strategyWikiSearchUrl(prefix));
+            }
           }
         }
       } catch (caught) {
@@ -147,6 +159,15 @@ function SourceListing({ source }: { source: string }): JSX.Element {
       {loading && <Spinner label="Loading listing…" />}
       {error && <ErrorNote error={error} />}
       <Warnings warnings={warnings} />
+      {challengeLink && (
+        <p className="muted">
+          <a className="link-out" href={challengeLink} target="_blank" rel="noreferrer noopener">
+            Search StrategyWiki directly ↗
+          </a>{' '}
+          — opening the site yourself is the one request its bot check will let you
+          through.
+        </p>
+      )}
 
       <ul className="list">
         {entries.map((entry) => (
