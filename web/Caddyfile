@@ -7,6 +7,31 @@
 :80 {
 	root * /srv
 
+	# Access log to stdout, so `docker logs omni-uhs-web` shows what the app is
+	# doing. The default console format prints every request and response
+	# header, which buries the four fields anyone actually reads, so those are
+	# filtered out. Note that /api/* lines include the query string — search
+	# terms appear here.
+	log {
+		output stdout
+		format filter {
+			wrap console
+			fields {
+				request>headers delete
+				request>tls delete
+				resp_headers delete
+				bytes_read delete
+				user_id delete
+			}
+		}
+		level INFO
+	}
+
+	# The container health check hits this every 30 seconds. It is not activity,
+	# and left in it drowns out everything that is.
+	@health path /healthz
+	log_skip @health
+
 	encode zstd gzip
 
 	# Never cache the entry points. index.html and the service worker are how a

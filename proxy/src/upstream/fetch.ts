@@ -8,6 +8,7 @@
  */
 
 import { config } from '../config.js';
+import { log, since } from '../log.js';
 import { UpstreamRejected, assertAllowed } from './allowlist.js';
 import { HostLimiter } from './limiter.js';
 
@@ -82,6 +83,7 @@ async function once(request: UpstreamRequest, url: URL): Promise<Response> {
   for (let hop = 0; hop <= 5; hop++) {
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), config.requestTimeoutMs);
+    const started = performance.now();
     let response: Response;
     try {
       response = await fetch(current, {
@@ -92,12 +94,29 @@ async function once(request: UpstreamRequest, url: URL): Promise<Response> {
       });
     } catch (error) {
       clearTimeout(timer);
+      // Every line that leaves this container is worth a log entry: these are
+      // the requests someone else's server has to serve.
+      log.upstream.warn(
+        { host: current.hostname, url: current.toString(), ms: since(started), err: (error as Error).message },
+        `${current.hostname} request failed`,
+      );
       throw new UpstreamError(
         `Upstream request failed: ${(error as Error).message}`,
         502,
       );
     }
     clearTimeout(timer);
+
+    log.upstream[response.ok || response.status === 304 ? 'info' : 'warn'](
+      {
+        host: current.hostname,
+        url: current.toString(),
+        status: response.status,
+        ms: since(started),
+        bytes: Number(response.headers.get('content-length')) || undefined,
+      },
+      `${request.method ?? 'GET'} ${current.hostname} ${response.status}`,
+    );
 
     // Only actual redirects — 304 Not Modified lives in the 3xx range too and
     // must be handed back to the caller so conditional requests work.
@@ -132,6 +151,10 @@ export async function fetchUpstream(request: UpstreamRequest): Promise<Response>
     if (response.status === 429 || response.status === 503) {
       const wait = parseRetryAfter(response.headers.get('retry-after'));
       if (wait !== null && wait <= config.maxRetryAfterMs) {
+        log.upstream.warn(
+          { host: url.hostname, status: response.status, waitMs: wait },
+          `${url.hostname} asked us to back off for ${Math.round(wait / 1000)}s`,
+        );
         await response.body?.cancel();
         await sleep(wait);
         response = await once(request, url);

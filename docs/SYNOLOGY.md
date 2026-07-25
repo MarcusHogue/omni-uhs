@@ -12,11 +12,11 @@ There are two ways to run it, and the first is the one you want.
 | **A. Native Tailscale + local stack** | Synology's Tailscale package handles the tunnel; the containers just serve on a local port | Recommended. No privileged containers, no `/dev/net/tun` juggling, survives DSM upgrades |
 | **B. Tailscale sidecar container** | Exactly the `docker-compose.yml` from the repo | Self-contained, but needs SSH and a privileged container |
 
-> I do not have a Synology to test on, so treat the DSM click-paths as
-> written-from-the-docs rather than verified. The container side is identical to
-> the local stack and is fully tested — including, specifically, the bind-mount
-> ownership and the port mapping below, both reproduced against the published
-> images.
+> The DSM click-paths below are written from Synology's documentation rather
+> than verified on hardware, so menu names may differ slightly by DSM version.
+> The container side is identical to the local stack and is fully tested —
+> including, specifically, the bind-mount ownership and the port mapping below,
+> both reproduced against the published images.
 
 ---
 
@@ -117,18 +117,16 @@ networks:
 Click through to **Done**; Container Manager pulls the images and starts both
 containers.
 
-> **The packages are private.** This repository is private, so GHCR will refuse
-> the pull until the NAS is logged in. Over SSH, with a classic PAT that has the
-> `read:packages` scope:
+> The published packages are public, so no registry login is needed. If you
+> fork this and keep your own packages private, log the NAS in once over SSH
+> with a classic PAT that has the `read:packages` scope — Container Manager
+> keeps the credential and reuses it:
 >
 > ```bash
-> echo "$GHCR_PAT" | sudo docker login ghcr.io -u MarcusHogue --password-stdin
+> echo "$GHCR_PAT" | sudo docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
 > ```
 >
-> Container Manager keeps that credential and reuses it. The simpler
-> alternative is to make the two packages public (package page → Package
-> settings → Change visibility) — they hold only the app, no hint content and
-> no secrets. Failing both, build on the NAS as in §D.
+> On an ARM model neither applies: build on the NAS as in §D.
 
 Two things differ from the repo's `docker-compose.local.yml`, both on purpose:
 

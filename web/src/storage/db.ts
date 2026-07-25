@@ -140,6 +140,32 @@ export async function clearRevealState(id: string): Promise<void> {
   await (await getDb()).delete('revealState', id);
 }
 
+/** Every document's reveal progress — for a full backup. */
+export async function listRevealStates(): Promise<RevealState[]> {
+  return (await getDb()).getAll('revealState');
+}
+
+/**
+ * Restore reveal progress.
+ *
+ * Merged rather than overwritten, and always upwards: importing a backup made
+ * before you read further should not un-reveal hints you have since seen. The
+ * store only ever counts how much has been shown, so `max` is the whole rule.
+ */
+export async function putRevealState(state: RevealState): Promise<void> {
+  const db = await getDb();
+  const current = await db.get('revealState', state.id);
+  const revealed = { ...current?.revealed };
+  for (const [nodeId, count] of Object.entries(state.revealed ?? {})) {
+    revealed[nodeId] = Math.max(revealed[nodeId] ?? 0, count);
+  }
+  await db.put('revealState', {
+    id: state.id,
+    revealed,
+    updatedAt: new Date().toISOString(),
+  });
+}
+
 export async function getSetting<T>(key: string, fallback: T): Promise<T> {
   const value = await (await getDb()).get('settings', key);
   return (value as T | undefined) ?? fallback;
@@ -147,6 +173,14 @@ export async function getSetting<T>(key: string, fallback: T): Promise<T> {
 
 export async function setSetting(key: string, value: unknown): Promise<void> {
   await (await getDb()).put('settings', value, key);
+}
+
+/** All settings as a plain object — for a full backup. */
+export async function listSettings(): Promise<Record<string, unknown>> {
+  const db = await getDb();
+  const keys = await db.getAllKeys('settings');
+  const values = await db.getAll('settings');
+  return Object.fromEntries(keys.map((key, index) => [String(key), values[index]]));
 }
 
 /**

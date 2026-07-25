@@ -8,6 +8,7 @@
  */
 
 import { config } from '../config.js';
+import { log, since } from '../log.js';
 import type { Cache } from '../cache/index.js';
 import { searchIfArchive, refreshIfArchiveCatalog } from './ifarchive.js';
 import { searchIfdb } from './ifdb.js';
@@ -255,11 +256,21 @@ export async function searchCatalog(
   const challenged: SourceKind[] = [];
   const enabled = sources.filter((source) => RUNNERS[source] !== undefined);
 
+  const started = performance.now();
+  const counts: Record<string, number> = {};
+
   const results = await Promise.all(
     enabled.map(async (source) => {
       try {
-        return await withTimeout(source, config.searchTimeoutMs, RUNNERS[source]!(cache, query));
+        const entries = await withTimeout(
+          source,
+          config.searchTimeoutMs,
+          RUNNERS[source]!(cache, query),
+        );
+        counts[source] = entries.length;
+        return entries;
       } catch (error) {
+        counts[source] = -1;
         warnings.push(`${source}: ${(error as Error).message}`);
         if ((error as { upstreamChallenge?: boolean }).upstreamChallenge) challenged.push(source);
         return [] as CatalogEntry[];
@@ -267,9 +278,20 @@ export async function searchCatalog(
     }),
   );
 
+  const groups = groupEntries(results.flat(), query);
+
+  // One line per search, with the per-source hit counts. A source quietly
+  // returning nothing looks identical to a working one from the UI, so this is
+  // where you find out that e.g. the IF Archive index never refreshed. A count
+  // of -1 means that source failed and named itself in `warnings`.
+  log.search.info(
+    { query, sources: counts, groups: groups.length, ms: since(started), challenged },
+    `search "${query}" -> ${groups.length} groups`,
+  );
+
   return {
     query,
-    groups: groupEntries(results.flat(), query),
+    groups,
     warnings,
     sources: enabled,
     challenged,

@@ -23,10 +23,36 @@ const list = (value: string | undefined, fallback: string[]): string[] => {
 
 const HOUR = 3600;
 
+const LEVELS = ['trace', 'debug', 'info', 'warn', 'error', 'fatal', 'silent'] as const;
+export type LogLevel = (typeof LEVELS)[number];
+
+const level = (value: string | undefined): LogLevel => {
+  const wanted = (value ?? '').trim().toLowerCase() as LogLevel;
+  if (LEVELS.includes(wanted)) return wanted;
+  // Tests build caches and apps constantly; their logs are noise, not activity.
+  return process.env['NODE_ENV'] === 'test' ? 'silent' : 'info';
+};
+
 export const config = {
   port: int(process.env['PORT'], 8080),
   host: process.env['HOST'] ?? '0.0.0.0',
   cacheDir: resolve(process.env['CACHE_DIR'] ?? '/data/cache'),
+
+  /**
+   * How much shows up in `docker logs`.
+   *
+   * `info` is the useful default: one line per request, plus every upstream
+   * fetch, catalog refresh and search. `debug` adds cache hits and the
+   * individual decisions behind them, which is what you want when something is
+   * being served stale or refetched more than it should be.
+   */
+  logLevel: level(process.env['LOG_LEVEL']),
+
+  /**
+   * Whether the per-request access line is emitted at all. The health check
+   * is always excluded — it fires every 30s and says nothing.
+   */
+  logRequests: process.env['LOG_REQUESTS'] !== 'false',
 
   /**
    * Hostname allowlist. Enforced after URL parsing and again on every redirect
