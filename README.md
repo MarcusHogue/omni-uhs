@@ -196,8 +196,13 @@ implemented — all-rights-reserved or ToS-restricted.
 
 See [docs/SETUP.md](docs/SETUP.md) for the full runbook.
 
-- **Updates:** GitHub Actions publishes to GHCR on push to `main`; on the host,
-  `docker compose pull && docker compose up -d`.
+- **Images:** `ghcr.io/marcushogue/omni-uhs-web` and
+  `ghcr.io/marcushogue/omni-uhs-proxy`, tagged `latest` and by commit SHA.
+  Published on push to `main`, so they do not exist until this branch merges —
+  build from source with `--build` until then. The packages inherit this
+  repository's visibility, so pulling needs a `read:packages` login while it is
+  private.
+- **Updates:** on the host, `docker compose pull && docker compose up -d`.
 - **Backups:** weekly tar of the `cache-data` and `ts-state` volumes. Your
   library lives in the browser — use Settings → Export for that.
 - **Health:** `/healthz` on both containers.
