@@ -10,13 +10,25 @@ import type { FastifyInstance } from 'fastify';
 import { getCache } from '../cache/index.js';
 import { listIfArchive, refreshIfArchiveCatalog } from '../catalog/ifarchive.js';
 import { STRATEGYWIKI, listWikiPages } from '../catalog/mediawiki.js';
-import { SEARCHABLE_SOURCES, searchCatalog } from '../catalog/search.js';
+import {
+  DEFAULT_SEARCH_SOURCES,
+  SEARCHABLE_SOURCES,
+  describeSources,
+  searchCatalog,
+} from '../catalog/search.js';
 import type { SourceKind } from '../catalog/types.js';
 import { listUhsCatalog, refreshUhsCatalog } from '../catalog/uhs.js';
 
 const MIN_QUERY = 3;
 
 export async function catalogRoutes(app: FastifyInstance): Promise<void> {
+  // Which sources exist, and which the server searches when asked for none.
+  // The UI reads this rather than hard-coding the list, so SEARCH_SOURCES on
+  // the server is what actually decides the default chips.
+  app.get('/api/catalog/sources', async (_request, reply) =>
+    reply.send({ sources: describeSources() }),
+  );
+
   app.get('/api/catalog/search', async (request, reply) => {
     const { q, sources } = request.query as { q?: string; sources?: string };
     const query = (q ?? '').trim();
@@ -24,9 +36,11 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
       return reply.code(400).send({ error: `q must be at least ${MIN_QUERY} characters` });
     }
 
+    // No `sources` means "whatever the server considers useful by default",
+    // which is not the same as "everything" — see DEFAULT_SEARCH_SOURCES.
     const requested = sources
       ? (sources.split(',').map((s) => s.trim()).filter(Boolean) as SourceKind[])
-      : SEARCHABLE_SOURCES;
+      : DEFAULT_SEARCH_SOURCES;
     const unknown = requested.filter((s) => !SEARCHABLE_SOURCES.includes(s));
     if (unknown.length > 0) {
       return reply.code(400).send({ error: `unknown source(s): ${unknown.join(', ')}` });
@@ -71,7 +85,15 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
             warnings: [],
           });
         } catch (error) {
-          return reply.send({ source, entries: [], warnings: [`${source}: ${(error as Error).message}`] });
+          return reply.send({
+            source,
+            entries: [],
+            warnings: [`${source}: ${(error as Error).message}`],
+            // The browser may reach a host that bot-challenged this server.
+            challenged: (error as { upstreamChallenge?: boolean }).upstreamChallenge
+              ? [source]
+              : [],
+          });
         }
       }
       default:

@@ -18,7 +18,7 @@ import Database from 'better-sqlite3';
 
 import { config } from '../config.js';
 import { SingleFlight } from '../upstream/limiter.js';
-import { fetchUpstream, type UpstreamRequest } from '../upstream/fetch.js';
+import { describeUpstreamRejection, fetchUpstream, type UpstreamRequest } from '../upstream/fetch.js';
 
 export interface CacheEntry {
   key: string;
@@ -66,6 +66,44 @@ CREATE TABLE IF NOT EXISTS catalog_state (
 );
 `;
 
+/**
+ * Codes that mean "the cache directory is not writable by this user".
+ *
+ * `mkdirSync(…, { recursive: true })` succeeds silently when the directory
+ * already exists, so a bind mount that was pre-created on the host — or
+ * restored from a backup — sails past the mkdir and fails later, when SQLite
+ * tries to create `index.sqlite` or its WAL. better-sqlite3 reports that as
+ * SQLITE_CANTOPEN/SQLITE_READONLY rather than EACCES, and by the time we get
+ * there the directory demonstrably exists, so a permission problem is what it
+ * is.
+ */
+const UNWRITABLE = new Set(['EACCES', 'EPERM', 'SQLITE_CANTOPEN', 'SQLITE_READONLY']);
+
+/**
+ * Turn an unwritable cache directory into an instruction.
+ *
+ * The container runs as the distroless `nonroot` user (uid 65532). The image
+ * ships `/data/cache` already owned by that user, so a *named volume* inherits
+ * the right ownership automatically — but a *bind mount* replaces the directory
+ * wholesale, keeping whatever the host created, which is usually root. The bare
+ * `EACCES … mkdir` this produces says nothing about how to fix it, and a NAS is
+ * exactly where people use bind mounts.
+ */
+export function describeCacheDirFailure(dir: string, error: NodeJS.ErrnoException): Error {
+  if (!UNWRITABLE.has(error.code ?? '')) return error;
+  const uid = typeof process.getuid === 'function' ? process.getuid() : 'the container user';
+  return new Error(
+    `Cannot write to CACHE_DIR (${dir}): ${error.code}${error.code?.startsWith('SQLITE') ? ` (${error.message})` : ''}.\n` +
+      `\n` +
+      `This container runs as uid ${uid}. If ${dir} is a bind mount from the host,\n` +
+      `give that user ownership of the host directory:\n` +
+      `\n` +
+      `    sudo chown -R 65532:65532 /path/on/host\n` +
+      `\n` +
+      `A named Docker volume needs no such step — the image seeds the ownership.`,
+  );
+}
+
 export class Cache {
   readonly db: Database.Database;
   private readonly blobDir: string;
@@ -74,13 +112,20 @@ export class Cache {
   upstreamFetches = 0;
 
   constructor(dir: string = config.cacheDir) {
-    mkdirSync(dir, { recursive: true });
     this.blobDir = join(dir, 'blobs');
-    mkdirSync(this.blobDir, { recursive: true });
-    this.db = new Database(join(dir, 'index.sqlite'));
-    this.db.pragma('journal_mode = WAL');
-    this.db.pragma('synchronous = NORMAL');
-    this.db.exec(SCHEMA);
+    // Opening the database belongs inside this guard: when the directories
+    // already exist but are not writable, mkdir succeeds and SQLite is the
+    // first thing that actually fails.
+    try {
+      mkdirSync(dir, { recursive: true });
+      mkdirSync(this.blobDir, { recursive: true });
+      this.db = new Database(join(dir, 'index.sqlite'));
+      this.db.pragma('journal_mode = WAL');
+      this.db.pragma('synchronous = NORMAL');
+      this.db.exec(SCHEMA);
+    } catch (error) {
+      throw describeCacheDirFailure(dir, error as NodeJS.ErrnoException);
+    }
   }
 
   close(): void {
@@ -223,16 +268,26 @@ export class Cache {
       }
 
       if (!response.ok) {
+        const rejection = describeUpstreamRejection(
+          new URL(request.url).hostname,
+          response,
+        );
         await response.body?.cancel();
         if (recheck) {
           // Upstream is unhappy but we have something. Serving stale beats
           // failing: these files do not change.
           return { ...recheck, fromCache: true, revalidated: true };
         }
-        const error = new Error(`Upstream responded ${response.status}`) as Error & {
+        const error = new Error(
+          rejection ?? `Upstream responded ${response.status}`,
+        ) as Error & {
           statusCode: number;
+          upstreamChallenge?: boolean;
         };
         error.statusCode = response.status === 404 ? 404 : 502;
+        // Machine-readable so the browser can decide to try the site itself:
+        // the challenge is aimed at servers, and the user's browser may pass it.
+        if (rejection) error.upstreamChallenge = true;
         throw error;
       }
 

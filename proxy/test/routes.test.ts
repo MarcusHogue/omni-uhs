@@ -182,10 +182,36 @@ describe('/api/catalog/search', () => {
       groups: [],
       warnings: ['strategywiki: timed out after 8000ms', 'ifdb: Upstream responded 403'],
       sources: ['uhs', 'strategywiki', 'ifdb'],
+      challenged: [],
     });
     const response = await app.inject({ method: 'GET', url: '/api/catalog/search?q=zork' });
     expect(response.statusCode).toBe(200);
     expect(response.json().warnings).toHaveLength(2);
+  });
+
+  it('searches the default sources, not every source, when none are named', async () => {
+    seedCatalog();
+    const response = await app.inject({ method: 'GET', url: '/api/catalog/search?q=zork' });
+    expect(response.json().sources).toEqual(['uhs', 'ifarchive', 'ifdb']);
+  });
+});
+
+describe('/api/catalog/sources', () => {
+  it('advertises every searchable source and which are on by default', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/catalog/sources' });
+    expect(response.statusCode).toBe(200);
+    const { sources } = response.json() as {
+      sources: { kind: string; enabledByDefault: boolean; note?: string }[];
+    };
+    expect(sources.map((source) => source.kind)).toEqual([
+      'uhs',
+      'ifarchive',
+      'strategywiki',
+      'ifdb',
+    ]);
+    const strategywiki = sources.find((source) => source.kind === 'strategywiki')!;
+    expect(strategywiki.enabledByDefault).toBe(false);
+    expect(strategywiki.note).toMatch(/Cloudflare/);
   });
 });
 

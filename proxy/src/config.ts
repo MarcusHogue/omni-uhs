@@ -70,6 +70,21 @@ export const config = {
 
   /** Search fan-out budget; a slow source must not stall the whole response. */
   searchTimeoutMs: int(process.env['SEARCH_TIMEOUT_MS'], 8_000),
+
+  /**
+   * Sources a search hits when the request does not name any.
+   *
+   * StrategyWiki is left out of the default because it answers every
+   * server-side request with a Cloudflare managed challenge, so including it
+   * only produces a warning on every search. Add it back with
+   * SEARCH_SOURCES=uhs,ifarchive,ifdb,strategywiki if that ever changes; it can
+   * always be requested explicitly regardless.
+   */
+  searchSources: list(process.env['SEARCH_SOURCES'], [
+    'uhs',
+    'ifarchive',
+    'ifdb',
+  ]) as ('uhs' | 'ifarchive' | 'ifdb' | 'strategywiki' | 'fandom' | 'wikigg')[],
 } as const;
 
 export type Config = typeof config;

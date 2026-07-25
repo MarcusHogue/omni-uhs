@@ -1,6 +1,6 @@
 import type { SourceKind } from '../parser/ast';
 
-const SOURCE_LABELS: Record<SourceKind, string> = {
+export const SOURCE_LABELS: Record<SourceKind, string> = {
   uhs: 'UHS',
   ifarchive: 'IF Archive',
   ifdb: 'IFDB',
