@@ -208,7 +208,8 @@ implemented — all-rights-reserved or ToS-restricted.
 See [docs/SETUP.md](docs/SETUP.md) for the full runbook.
 
 - **Images:** `ghcr.io/marcushogue/omni-uhs-web` and
-  `ghcr.io/marcushogue/omni-uhs-proxy`, tagged `latest` and by commit SHA.
+  `ghcr.io/marcushogue/omni-uhs-proxy`, tagged `latest` and by commit SHA, both
+  full and short.
   Published on push to `main`. Both are public — no `docker login` needed.
 - **Updates:** on the host, `docker compose pull && docker compose up -d`.
 - **Backups:** weekly tar of the `cache-data` and `ts-state` volumes. Your

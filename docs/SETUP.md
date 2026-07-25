@@ -168,10 +168,8 @@ ghcr.io/marcushogue/omni-uhs-web:latest      # Caddy + the built PWA
 ghcr.io/marcushogue/omni-uhs-proxy:latest    # Fastify cache/allowlist proxy
 ```
 
-Every build is also tagged with its commit SHA, so a bad deploy can be pinned
-back to a known-good one. Both are published by
-`.github/workflows/publish.yml` on push to `main`, and both are **public** — no
-`docker login` needed:
+Both are published by `.github/workflows/publish.yml` on push to `main`, and
+both are **public** — no `docker login` needed:
 
 ```bash
 docker pull ghcr.io/marcushogue/omni-uhs-web:latest
@@ -181,11 +179,16 @@ docker pull ghcr.io/marcushogue/omni-uhs-proxy:latest
 Browse them from the repository's **Packages** panel. They are `linux/amd64`
 only; see the Synology notes for ARM.
 
+Every build is tagged three ways — `latest`, the full commit SHA, and the first
+seven characters of it. The short one exists because a registry matches tags as
+literal strings and will not expand an abbreviated Git object id: `:1a2b3c4`
+only resolves because it is published under that exact name.
+
 Pinning by SHA is worth doing on a NAS, where the UI has no "pull" button:
-changing the tag is the whole update, and it rolls back the same way.
+changing the tag is the whole update, and it rolls back the same way. Copy a tag
+from the Packages page.
 
 ```yaml
-# Any commit SHA from the Packages page; the short form works.
 image: ghcr.io/marcushogue/omni-uhs-web:1a2b3c4
 ```
 

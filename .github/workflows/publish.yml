@@ -36,17 +36,24 @@ jobs:
       #   invalid reference format: repository name must be lowercase
       - name: Lowercase the image namespace
         id: ns
-        run: echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+        run: |
+          echo "owner=${GITHUB_REPOSITORY_OWNER,,}" >> "$GITHUB_OUTPUT"
+          # Registries match tags as literal strings and will not expand an
+          # abbreviated Git object id, so a short SHA has to be published as its
+          # own tag or `:abc1234` is a 404. It is the form anyone actually types
+          # into a NAS GUI, so it is worth having.
+          echo "short=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/build-push-action@v7
         with:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
-          # `latest` for `docker compose pull`, the SHA so a bad deploy can be
-          # rolled back to a specific build.
+          # `latest` for `docker compose pull`; the full and short SHA so a bad
+          # deploy can be rolled back to a specific build by either name.
           tags: |
             ghcr.io/${{ steps.ns.outputs.owner }}/omni-uhs-${{ matrix.name }}:latest
             ghcr.io/${{ steps.ns.outputs.owner }}/omni-uhs-${{ matrix.name }}:${{ github.sha }}
+            ghcr.io/${{ steps.ns.outputs.owner }}/omni-uhs-${{ matrix.name }}:${{ steps.ns.outputs.short }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
