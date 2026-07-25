@@ -47,7 +47,7 @@ export const config = {
 
   userAgent:
     process.env['USER_AGENT'] ??
-    'HintReader/1.0 (+personal use; contact: set USER_AGENT to your address)',
+    'OmniUHS/1.0 (+personal use; contact: set USER_AGENT to your address)',
 
   /** Per-class cache lifetimes, in seconds. */
   ttl: {

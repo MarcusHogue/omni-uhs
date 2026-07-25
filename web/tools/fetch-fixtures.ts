@@ -22,7 +22,7 @@ import { unzipSync } from 'fflate';
 const here = dirname(fileURLToPath(import.meta.url));
 const outDir = join(here, '..', 'test', 'fixtures', 'real');
 
-const USER_AGENT = 'HintReader/1.0 (personal use; parser validation)';
+const USER_AGENT = 'OmniUHS/1.0 (personal use; parser validation)';
 const CATALOG = 'https://www.uhs-hints.com/cgi-bin/update.cgi';
 
 /** A spread of generations, all small. */

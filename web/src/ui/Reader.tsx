@@ -19,6 +19,8 @@ export function Reader(): JSX.Element {
   const [missing, setMissing] = useState(false);
   const [revealed, setRevealedState] = useState<Record<string, number>>({});
   const [find, setFind] = useState('');
+  const [finding, setFinding] = useState(false);
+  const [showTrail, setShowTrail] = useState(false);
 
   const documentId = id ? decodeURIComponent(id) : '';
 
@@ -70,9 +72,44 @@ export function Reader(): JSX.Element {
   const go = (target: string): void =>
     navigate(`/read/${encodeURIComponent(documentId)}/${encodeURIComponent(target)}`);
 
+  const parent = trail.length > 1 ? trail[trail.length - 2] : null;
+  const goUp = (): void => {
+    if (parent?.id) go(parent.id);
+    else navigate('/');
+  };
+
   return (
     <div className="reader">
-      <div className="reader-head">
+      {/*
+        One line of chrome instead of a breadcrumb block: where you are, one tap
+        back, and a find button that only becomes a field when you want it. The
+        full trail is available by tapping the location text.
+      */}
+      <div className="reader-bar">
+        <button type="button" className="back" onClick={goUp} aria-label="Back">
+          ‹
+        </button>
+        <button
+          type="button"
+          className="reader-where linkish"
+          onClick={() => setShowTrail((open) => !open)}
+          aria-expanded={showTrail}
+          title="Show the full path"
+        >
+          {trail.length > 1 ? trail[trail.length - 2]!.label : stored.title}
+        </button>
+        <button
+          type="button"
+          className="icon"
+          onClick={() => setFinding((open) => !open)}
+          aria-label={finding ? 'Close find' : 'Find in this document'}
+          aria-pressed={finding}
+        >
+          {finding ? '✕' : '⌕'}
+        </button>
+      </div>
+
+      {showTrail && (
         <p className="crumbs">
           <Link to="/">Library</Link>
           {trail.map((node, i) => (
@@ -88,21 +125,27 @@ export function Reader(): JSX.Element {
             </span>
           ))}
         </p>
-        <p className="row-meta">
-          <SourceBadge kind={stored.sourceKind} />
-          <span className="muted">{stored.attribution ?? stored.license}</span>
-        </p>
-      </div>
+      )}
 
-      <input
-        className="filter"
-        type="search"
-        value={find}
-        placeholder="Find a section or question…"
-        onChange={(event) => setFind(event.target.value)}
-        aria-label="Find in this document"
-      />
-      {find.trim().length >= 2 && (
+      {showTrail && (
+        <p className="doc-meta">
+          <SourceBadge kind={stored.sourceKind} />
+          <span>{stored.attribution ?? stored.license}</span>
+        </p>
+      )}
+
+      {finding && (
+        <input
+          className="filter"
+          type="search"
+          value={find}
+          autoFocus
+          placeholder="Find a section or question…"
+          onChange={(event) => setFind(event.target.value)}
+          aria-label="Find in this document"
+        />
+      )}
+      {finding && find.trim().length >= 2 && (
         <div className="find-results">
           <p className="muted">
             {matches.length} match{matches.length === 1 ? '' : 'es'} in section and question
@@ -116,6 +159,7 @@ export function Reader(): JSX.Element {
                   className="row-main linkish"
                   onClick={() => {
                     setFind('');
+                    setFinding(false);
                     go(match.id);
                   }}
                 >
@@ -128,7 +172,7 @@ export function Reader(): JSX.Element {
         </div>
       )}
 
-      {find.trim().length < 2 && (
+      {!(finding && find.trim().length >= 2) && (
         <NodeView
           node={current}
           revealed={revealed}

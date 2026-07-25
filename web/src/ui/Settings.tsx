@@ -9,6 +9,15 @@ import {
 import { exportLibrary, importLibrary, type ExportManifest } from '../storage/exchange';
 import { formatBytes } from './bits';
 import { useLibrary } from './hooks';
+import {
+  applyTextScale,
+  applyTheme,
+  readTextScale,
+  readTheme,
+  THEMES,
+  type TextScale,
+  type ThemeId,
+} from './themes';
 
 export function Settings(): JSX.Element {
   const { documents, reload } = useLibrary();
@@ -18,6 +27,9 @@ export function Settings(): JSX.Element {
   const [manifest, setManifest] = useState<ExportManifest | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  // Seeded synchronously so the picker never disagrees with what is on screen.
+  const [theme, setTheme] = useState<ThemeId>(() => readTheme());
+  const [scale, setScale] = useState<TextScale>(() => readTextScale());
 
   useEffect(() => {
     void (async () => {
@@ -31,6 +43,52 @@ export function Settings(): JSX.Element {
 
   return (
     <div className="settings">
+      <section>
+        <h2>Theme</h2>
+        <div className="theme-grid">
+          {THEMES.map((option) => (
+            <button
+              key={option.id}
+              type="button"
+              className="theme-card"
+              aria-pressed={theme === option.id}
+              onClick={() => {
+                setTheme(option.id);
+                applyTheme(option.id);
+              }}
+            >
+              <span className="theme-swatch" aria-hidden="true">
+                {option.swatch.map((colour, i) => (
+                  <span key={i} style={{ background: colour }} />
+                ))}
+              </span>
+              <span className="theme-name">{option.name}</span>
+              <span className="theme-note">{option.note}</span>
+            </button>
+          ))}
+        </div>
+      </section>
+
+      <section>
+        <h2>Text size</h2>
+        <p className="muted">Applies to hint and walkthrough text.</p>
+        <div className="scale-row">
+          {(['small', 'medium', 'large'] as TextScale[]).map((option) => (
+            <button
+              key={option}
+              type="button"
+              aria-pressed={scale === option}
+              onClick={() => {
+                setScale(option);
+                applyTextScale(option);
+              }}
+            >
+              {option[0]!.toUpperCase() + option.slice(1)}
+            </button>
+          ))}
+        </div>
+      </section>
+
       <section>
         <h2>Storage</h2>
         {estimate ? (
@@ -114,7 +172,7 @@ export function Settings(): JSX.Element {
                 );
                 const anchor = document.createElement('a');
                 anchor.href = url;
-                anchor.download = `hint-reader-export-${new Date()
+                anchor.download = `omni-uhs-export-${new Date()
                   .toISOString()
                   .slice(0, 10)}.zip`;
                 anchor.click();

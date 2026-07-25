@@ -15,7 +15,7 @@ try {
       allowlist: config.upstreamAllowlist,
       userAgent: config.userAgent,
     },
-    'hint-reader proxy ready',
+    'omni-uhs proxy ready',
   );
 } catch (error) {
   app.log.error(error);

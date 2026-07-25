@@ -24,7 +24,7 @@ export default defineConfig({
       },
       includeAssets: ['icons/icon.svg', 'icons/apple-touch-icon.png'],
       manifest: {
-        name: 'Hint Reader',
+        name: 'Omni UHS',
         short_name: 'Hints',
         description: 'Personal, spoiler-safe, offline game hint reader',
         theme_color: '#12141c',

@@ -1,4 +1,4 @@
-# Hint Reader — local stack, no Tailscale.
+# Omni UHS — local stack, no Tailscale.
 #
 #   docker compose -f docker-compose.local.yml up --build -d
 #   open http://localhost:8081
@@ -14,13 +14,13 @@ services:
     build:
       context: .
       dockerfile: proxy/Dockerfile
-    image: ghcr.io/marcushogue/hint-reader-proxy:latest
+    image: ghcr.io/marcushogue/omni-uhs-proxy:latest
     restart: unless-stopped
     environment:
       PORT: 8080
       HOST: 0.0.0.0
       CACHE_DIR: /data/cache
-      USER_AGENT: ${USER_AGENT:-HintReader/1.0 (+personal use; local development)}
+      USER_AGENT: ${USER_AGENT:-OmniUHS/1.0 (+personal use; local development)}
     volumes:
       - cache-data:/data/cache
     networks: [hint]
@@ -38,7 +38,7 @@ services:
     build:
       context: .
       dockerfile: web/Dockerfile
-    image: ghcr.io/marcushogue/hint-reader-web:latest
+    image: ghcr.io/marcushogue/omni-uhs-web:latest
     restart: unless-stopped
     environment:
       # No shared network namespace here, so reach the proxy by service name.

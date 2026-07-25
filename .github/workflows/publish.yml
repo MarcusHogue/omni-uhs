@@ -37,7 +37,7 @@ jobs:
           # `latest` for `docker compose pull`, the SHA so a bad deploy can be
           # rolled back to a specific build.
           tags: |
-            ghcr.io/${{ github.repository_owner }}/hint-reader-${{ matrix.name }}:latest
-            ghcr.io/${{ github.repository_owner }}/hint-reader-${{ matrix.name }}:${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/omni-uhs-${{ matrix.name }}:latest
+            ghcr.io/${{ github.repository_owner }}/omni-uhs-${{ matrix.name }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

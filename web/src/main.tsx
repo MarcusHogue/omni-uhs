@@ -8,7 +8,11 @@ import { Library } from './ui/Library';
 import { Reader } from './ui/Reader';
 import { Search } from './ui/Search';
 import { Settings } from './ui/Settings';
+import { initTheme } from './ui/themes';
 import './ui/styles.css';
+
+// Before the first paint, so launching never flashes the wrong theme.
+initTheme();
 
 /**
  * A hash router, deliberately.
