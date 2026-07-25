@@ -31,8 +31,8 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       # A Docker reference must be lowercase, but `github.repository_owner`
-      # keeps the account's own capitalisation ("MarcusHogue"), which buildx
-      # rejects outright:
+      # preserves the account's own capitalisation, which buildx rejects
+      # outright when it contains any:
       #   invalid reference format: repository name must be lowercase
       - name: Lowercase the image namespace
         id: ns

@@ -8,7 +8,7 @@
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { HintDocument } from '../../src/parser/ast.js';
 import { parseUhs } from '../../src/parser/uhs/index.js';
@@ -20,7 +20,9 @@ import {
   listDocuments,
   putDocument,
   resetDb,
+  getSetting,
   setRevealed,
+  setSetting,
   type StoredDocument,
 } from '../../src/storage/db.js';
 import { exportLibrary, importLibrary } from '../../src/storage/exchange.js';
@@ -178,5 +180,118 @@ describe('export (spec §11)', () => {
 
   it('rejects a file that is not an export', async () => {
     await expect(importLibrary(new Uint8Array([0x50, 0x4b, 0x03, 0x04]))).rejects.toThrow();
+  });
+});
+
+describe('full backup', () => {
+  it('refuses without the personal-use acknowledgement', async () => {
+    await putDocument(stored(parseUhs(buildNested95a()).document));
+    await expect(exportLibrary({ scope: 'backup' })).rejects.toThrow(/acknowledgement/i);
+  });
+
+  it('includes personal-use-only titles once acknowledged, and says so', async () => {
+    const uhs = parseUhs(buildNested95a(), { url: 'https://example.test/u.zip' }).document;
+    await putDocument(stored(uhs));
+    await putDocument(stored(wikiDocument()));
+
+    const { manifest } = await exportLibrary({
+      scope: 'backup',
+      acknowledgedPersonalUse: true,
+    });
+
+    expect(manifest.scope).toBe('backup');
+    expect(manifest.containsPersonalUseOnly).toBe(true);
+    expect(manifest.excluded).toEqual([]);
+    expect(manifest.documents.map((d) => d.title).sort()).toEqual(
+      [uhs.game.title, 'Test Game'].sort(),
+    );
+    // The archive has to keep saying what it is once it is off the device.
+    expect(manifest.notice).toMatch(/personal use only/i);
+  });
+
+  it('round-trips reveal state and settings', async () => {
+    const uhs = parseUhs(buildNested95a(), { url: 'https://example.test/u.zip' }).document;
+    await putDocument(stored(uhs));
+    await setRevealed(uhs.id, 'uhs:12', 4);
+    await setSetting('decodeIncentive', true);
+
+    const { bytes, manifest } = await exportLibrary({
+      scope: 'backup',
+      acknowledgedPersonalUse: true,
+    });
+    expect(manifest.counts.revealStates).toBe(1);
+
+    await deleteDocument(uhs.id);
+    await setSetting('decodeIncentive', false);
+
+    const result = await importLibrary(bytes);
+    expect(result.scope).toBe('backup');
+    expect(result.imported).toBe(1);
+    expect(result.revealStates).toBe(1);
+    expect((await getRevealState(uhs.id)).revealed['uhs:12']).toBe(4);
+    expect(await getSetting('decodeIncentive', false)).toBe(true);
+  });
+
+  it('merges reveal state upwards, so an old backup cannot re-hide a hint', async () => {
+    const uhs = parseUhs(buildNested95a(), { url: 'https://example.test/u.zip' }).document;
+    await putDocument(stored(uhs));
+    await setRevealed(uhs.id, 'uhs:12', 1);
+    const { bytes } = await exportLibrary({ scope: 'backup', acknowledgedPersonalUse: true });
+
+    // Read further, then restore the older backup.
+    await setRevealed(uhs.id, 'uhs:12', 6);
+    await importLibrary(bytes);
+
+    expect((await getRevealState(uhs.id)).revealed['uhs:12']).toBe(6);
+  });
+
+  it('carries device preferences that live outside IndexedDB', async () => {
+    // These tests run in Node, which has no localStorage. The production code
+    // guards for that (private mode disables it too), so a stub is needed to
+    // exercise the path at all.
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      get length() {
+        return store.size;
+      },
+      key: (i: number) => [...store.keys()][i] ?? null,
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    });
+
+    // Theme and text size are in localStorage, so `listSettings()` never sees
+    // them; a backup that promised "your settings" and dropped them would lie.
+    localStorage.setItem('omni-uhs:theme', 'workbench');
+    localStorage.setItem('omni-uhs:text-scale', 'large');
+    localStorage.setItem('unrelated-app:key', 'left alone');
+    await putDocument(stored(wikiDocument()));
+
+    const { bytes, manifest } = await exportLibrary({
+      scope: 'backup',
+      acknowledgedPersonalUse: true,
+    });
+    expect(manifest.counts.preferences).toBe(2);
+
+    localStorage.setItem('omni-uhs:theme', 'dos');
+    localStorage.removeItem('omni-uhs:text-scale');
+
+    const result = await importLibrary(bytes);
+    expect(result.preferences).toBe(2);
+    expect(localStorage.getItem('omni-uhs:theme')).toBe('workbench');
+    expect(localStorage.getItem('omni-uhs:text-scale')).toBe('large');
+    // Only our namespace is touched.
+    expect(localStorage.getItem('unrelated-app:key')).toBe('left alone');
+    vi.unstubAllGlobals();
+  });
+
+  it('leaves reveal state and settings out of a shareable export', async () => {
+    await putDocument(stored(wikiDocument()));
+    await setRevealed(wikiDocument().id, 'p:0', 2);
+    const { manifest } = await exportLibrary();
+    expect(manifest.scope).toBe('shareable');
+    expect(manifest.counts.revealStates).toBe(0);
+    expect(manifest.counts.preferences).toBe(0);
+    expect(manifest.containsPersonalUseOnly).toBe(false);
   });
 });

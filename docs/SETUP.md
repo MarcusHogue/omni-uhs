@@ -136,11 +136,26 @@ docker run --rm \
   alpine tar czf /to/omni-uhs-cache-$(date +%F).tar.gz -C /from .
 ```
 
-Your **library** is not in either volume — it lives in the browser's IndexedDB.
-Use **Settings → Export library** for that. Note that the export deliberately
-excludes personal-use-only sources (which is every UHS file); it is a backup for
-the wiki-sourced material and your own metadata, not a way to move hint files
-around.
+Your **library** is not in either volume — it lives in the browser's IndexedDB,
+on each device. **Settings → Export & import** has two ways to take a copy:
+
+- **Full backup** — everything: every title, its original bytes, how far you
+  have revealed each set of hints, and your settings. This is the one to use
+  before switching phones or clearing site data. It necessarily contains
+  personal-use-only material, so it asks you to confirm that first, and the
+  archive carries the notice with it. Copying it between your own devices is
+  personal use; putting it anywhere other people can reach is not.
+- **Shareable export** — the subset with no redistribution restriction, and no
+  reading progress attached. Personal-use-only titles are listed in the
+  manifest rather than silently dropped.
+
+Import restores either. Reveal progress is merged upwards, so restoring an older
+backup never re-hides a hint you have already seen.
+
+Theme and text size ride along in a full backup too. They live in
+`localStorage` rather than IndexedDB — they have to be readable before the first
+paint, or the app flashes the wrong theme on every launch — so they are stored
+separately and restored separately.
 
 ---
 
@@ -163,19 +178,77 @@ docker pull ghcr.io/marcushogue/omni-uhs-web:latest
 docker pull ghcr.io/marcushogue/omni-uhs-proxy:latest
 ```
 
-Browse them at <https://github.com/MarcusHogue?tab=packages>. They are
-`linux/amd64` only; see the Synology notes for ARM.
+Browse them from the repository's **Packages** panel. They are `linux/amd64`
+only; see the Synology notes for ARM.
 
-If you ever make the packages private again, pulling needs a classic PAT with
-the **`read:packages`** scope:
+Pinning by SHA is worth doing on a NAS, where the UI has no "pull" button:
+changing the tag is the whole update, and it rolls back the same way.
+
+```yaml
+image: ghcr.io/marcushogue/omni-uhs-web:a07c434
+```
+
+If you fork this and keep your own packages private, pulling needs a classic
+PAT with the **`read:packages`** scope:
 
 ```bash
-echo "$GHCR_PAT" | docker login ghcr.io -u MarcusHogue --password-stdin
+echo "$GHCR_PAT" | docker login ghcr.io -u YOUR_GITHUB_USERNAME --password-stdin
 ```
 
 ---
 
-## 6. Updating
+## 6. Logs
+
+Both containers log to stdout, so `docker logs` is the whole story. Nothing is
+written to disk beyond Docker's own rotation (`10m × 3`, set in the compose
+files).
+
+```bash
+docker compose logs -f                    # both, interleaved
+docker compose logs -f proxy              # upstream fetches, cache, searches
+docker compose logs -f web                # HTTP access log
+```
+
+**web** is a Caddy access log, one line per request. The health check is
+excluded — it fires every 30 seconds and says nothing.
+
+**proxy** is newline-delimited JSON, one object per event, tagged with a
+`component`. At the default `info` level you get:
+
+| component | what it tells you |
+|---|---|
+| `http` | one line per API request: method, path, status, ms, `x-cache` |
+| `upstream` | every request that actually left the machine, with host and timing |
+| `cache` | what got stored, what came back `304`, what was served stale |
+| `catalog` | index refreshes and how many entries they produced |
+| `search` | one line per search: per-source hit counts, groups, total ms |
+
+It is dense to read raw, so pipe it through `jq`:
+
+```bash
+# Everything that left the machine today
+docker compose logs --no-log-prefix proxy | jq -c 'select(.component=="upstream")'
+
+# Searches, and how each source did
+docker compose logs --no-log-prefix proxy | jq -r \
+  'select(.component=="search") | "\(.query)\t\(.sources)\t\(.ms)ms"'
+
+# Anything that went wrong
+docker compose logs --no-log-prefix proxy | jq -c 'select(.level=="warn" or .level=="error")'
+```
+
+`LOG_LEVEL=debug` adds cache hits and misses — the level to use when something
+is being refetched more often than it should be, or served stale when it
+shouldn't. `LOG_REQUESTS=false` drops the per-request access line and keeps only
+the activity events.
+
+A search's query string appears in both logs. That is the point — it is how you
+tell "the search returned nothing" from "the search never ran" — but it is worth
+knowing before you paste a log into an issue.
+
+---
+
+## 7. Updating
 
 Images are published to GHCR on every push to `main`:
 
@@ -193,7 +266,7 @@ them, while the content-hashed assets are cached for a year.
 
 ---
 
-## 7. Troubleshooting
+## 8. Troubleshooting
 
 **The proxy container restarts in a loop.** Check `docker compose logs proxy`;
 it names the cause. An `EACCES` on the cache directory means it is a **bind
@@ -242,6 +315,6 @@ from the Home Screen icon. See §2.
 
 ---
 
-## 8. Synology NAS
+## 9. Synology NAS
 
 See **[SYNOLOGY.md](SYNOLOGY.md)**.

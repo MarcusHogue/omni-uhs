@@ -2,6 +2,7 @@
   "name": "@omni-uhs/proxy",
   "private": true,
   "version": "1.0.0",
+  "license": "MIT",
   "type": "module",
   "main": "dist/server.js",
   "scripts": {
@@ -14,7 +15,8 @@
   },
   "dependencies": {
     "better-sqlite3": "^11.3.0",
-    "fastify": "^5.0.0"
+    "fastify": "^5.0.0",
+    "pino": "^10.1.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",

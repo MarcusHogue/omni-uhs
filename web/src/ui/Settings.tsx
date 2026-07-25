@@ -6,7 +6,12 @@ import {
   setSetting,
   storageEstimate,
 } from '../storage/db';
-import { exportLibrary, importLibrary, type ExportManifest } from '../storage/exchange';
+import {
+  exportLibrary,
+  importLibrary,
+  type ExportManifest,
+  type ExportScope,
+} from '../storage/exchange';
 import { formatBytes } from './bits';
 import { useLibrary } from './hooks';
 import {
@@ -26,17 +31,74 @@ export function Settings(): JSX.Element {
   const [decodeIncentive, setDecodeIncentive] = useState(false);
   const [manifest, setManifest] = useState<ExportManifest | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  /** Ticked by the user before a full backup is allowed. Never persisted. */
+  const [acknowledged, setAcknowledged] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
   // Seeded synchronously so the picker never disagrees with what is on screen.
   const [theme, setTheme] = useState<ThemeId>(() => readTheme());
   const [scale, setScale] = useState<TextScale>(() => readTextScale());
 
+  /** Build the zip and hand it to the browser. */
+  const download = async (scope: ExportScope): Promise<void> => {
+    setMessage(null);
+    try {
+      const result = await exportLibrary({
+        scope,
+        ...(scope === 'backup' ? { acknowledgedPersonalUse: acknowledged } : {}),
+      });
+      setManifest(result.manifest);
+      if (result.manifest.documents.length === 0) {
+        setMessage(
+          scope === 'backup'
+            ? 'Nothing to back up: your library is empty.'
+            : 'Nothing to export: every title in your library is personal-use-only.',
+        );
+        return;
+      }
+      const url = URL.createObjectURL(
+        new Blob([result.bytes as BlobPart], { type: 'application/zip' }),
+      );
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      const kind = scope === 'backup' ? 'backup' : 'export';
+      anchor.download = `omni-uhs-${kind}-${new Date().toISOString().slice(0, 10)}.zip`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+      const { counts } = result.manifest;
+      setMessage(
+        scope === 'backup'
+          ? `Backed up ${counts.documents} title(s), ${counts.revealStates} with reading ` +
+              `progress — ${formatBytes(result.bytes.length)}.`
+          : `Exported ${counts.documents} title(s) — ${formatBytes(result.bytes.length)}.`,
+      );
+    } catch (error) {
+      setMessage((error as Error).message);
+    }
+  };
+
+  /**
+   * Pull every value this screen displays back out of storage.
+   *
+   * An import can rewrite all of them underneath a mounted component. Leaving
+   * the checkbox showing its pre-import value is not just cosmetic: the next
+   * click would write the stale value back over what was just restored.
+   */
+  const refreshFromStorage = async (): Promise<void> => {
+    setEstimate(await storageEstimate());
+    setPersisted((await navigator.storage?.persisted?.()) ?? false);
+    setDecodeIncentive(await getSetting('decodeIncentive', false));
+    // Theme and text size come back via localStorage, so re-read and re-apply.
+    const restoredTheme = readTheme();
+    const restoredScale = readTextScale();
+    setTheme(restoredTheme);
+    setScale(restoredScale);
+    applyTheme(restoredTheme);
+    applyTextScale(restoredScale);
+  };
+
+  // Once on mount; `refreshFromStorage` is also called after an import.
   useEffect(() => {
-    void (async () => {
-      setEstimate(await storageEstimate());
-      setPersisted((await navigator.storage?.persisted?.()) ?? false);
-      setDecodeIncentive(await getSetting('decodeIncentive', false));
-    })();
+    void refreshFromStorage();
   }, []);
 
   const personalOnly = documents.filter((d) => d.personalUseOnly).length;
@@ -144,10 +206,39 @@ export function Settings(): JSX.Element {
 
       <section>
         <h2>Export &amp; import</h2>
+
+        <h3>Full backup</h3>
         <p className="muted">
-          A durability backup for your library. Titles from personal-use-only sources are
-          never included — that is every UHS file, and any wiki with a non-commercial
-          licence.
+          Everything: every title, the original files, how far you have revealed each
+          set of hints, and your settings — including this theme and text size. This is
+          what to take to a new phone, or to keep before clearing site data.
+        </p>
+        <label className="toggle toggle-wrap">
+          <input
+            type="checkbox"
+            checked={acknowledged}
+            onChange={(event) => setAcknowledged(event.target.checked)}
+          />
+          <span>
+            I understand this backup contains hint content for{' '}
+            <strong>personal use only</strong> and will not publish or share it.
+          </span>
+        </label>
+        <div className="buttons">
+          <button
+            type="button"
+            disabled={!acknowledged || documents.length === 0}
+            onClick={() => void download('backup')}
+          >
+            Export full backup
+          </button>
+        </div>
+
+        <h3>Shareable export</h3>
+        <p className="muted">
+          The subset that carries no redistribution restriction, with no reading
+          progress attached. Titles from personal-use-only sources are left out — that
+          is every UHS file, and any wiki with a non-commercial licence.
           {personalOnly > 0 && (
             <>
               {' '}
@@ -158,32 +249,21 @@ export function Settings(): JSX.Element {
         <div className="buttons">
           <button
             type="button"
-            onClick={() => {
-              void (async () => {
-                setMessage(null);
-                const result = await exportLibrary();
-                setManifest(result.manifest);
-                if (result.manifest.documents.length === 0) {
-                  setMessage('Nothing to export: every title in your library is personal-use-only.');
-                  return;
-                }
-                const url = URL.createObjectURL(
-                  new Blob([result.bytes as BlobPart], { type: 'application/zip' }),
-                );
-                const anchor = document.createElement('a');
-                anchor.href = url;
-                anchor.download = `omni-uhs-export-${new Date()
-                  .toISOString()
-                  .slice(0, 10)}.zip`;
-                anchor.click();
-                URL.revokeObjectURL(url);
-              })();
-            }}
+            disabled={documents.length === 0}
+            onClick={() => void download('shareable')}
           >
-            Export library
+            Export shareable copy
           </button>
+        </div>
+
+        <h3>Import</h3>
+        <p className="muted">
+          Restores either kind. Reveal progress is merged upwards, so importing an
+          older backup never hides a hint you have already seen.
+        </p>
+        <div className="buttons">
           <button type="button" onClick={() => fileInput.current?.click()}>
-            Import library
+            Import from file
           </button>
           <input
             ref={fileInput}
@@ -198,10 +278,18 @@ export function Settings(): JSX.Element {
                 try {
                   const result = await importLibrary(new Uint8Array(await file.arrayBuffer()));
                   reload();
-                  setMessage(
-                    `Imported ${result.imported} title(s)` +
-                      (result.skipped.length > 0 ? `, skipped ${result.skipped.length}` : '.'),
-                  );
+                  await refreshFromStorage();
+                  const parts = [`Imported ${result.imported} title(s)`];
+                  if (result.revealStates > 0) {
+                    parts.push(`${result.revealStates} with reading progress`);
+                  }
+                  if (result.settings + result.preferences > 0) {
+                    parts.push(`${result.settings + result.preferences} setting(s)`);
+                  }
+                  if (result.skipped.length > 0) {
+                    parts.push(`skipped ${result.skipped.length}`);
+                  }
+                  setMessage(`${parts.join(', ')}.`);
                 } catch (error) {
                   setMessage((error as Error).message);
                 } finally {
