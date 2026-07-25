@@ -1141,3 +1141,61 @@ section h3 {
   background: var(--accent-soft);
   box-shadow: var(--bevel-in);
 }
+
+/* --- update notice -------------------------------------------------------- */
+
+/*
+ * One line, page-coloured, under the header. It is meant to be noticed once
+ * and then ignored — an update is not an emergency, and this app's whole
+ * premise is that the chrome gets out of the way.
+ */
+.update-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 16px;
+  font-size: 13px;
+  color: var(--page-text);
+  background: var(--accent-soft);
+  border-bottom: var(--border-w) solid var(--line);
+}
+
+.update-bar > span:first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.update-action {
+  flex: none;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  text-decoration: none;
+  min-height: 0;
+}
+
+.update-dismiss {
+  flex: none;
+  font-size: 18px;
+  line-height: 1;
+  padding: 0 2px;
+  color: var(--text-dim);
+}
+
+/* Version pairs in Settings. */
+.versions {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  margin: 0 0 12px;
+}
+
+.versions dt {
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.versions dd {
+  margin: 0;
+  font-size: 14px;
+}

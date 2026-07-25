@@ -9,10 +9,15 @@ import { Reader } from './ui/Reader';
 import { Search } from './ui/Search';
 import { Settings } from './ui/Settings';
 import { initTheme } from './ui/themes';
+import { startUpdateWatch } from './ui/update';
 import './ui/styles.css';
 
 // Before the first paint, so launching never flashes the wrong theme.
 initTheme();
+
+// Registers the service worker — which is what makes the app work offline at
+// all — and starts watching for a newer build.
+startUpdateWatch();
 
 /**
  * A hash router, deliberately.

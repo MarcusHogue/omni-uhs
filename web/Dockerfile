@@ -21,6 +21,12 @@ RUN --mount=type=cache,target=/root/.npm,id=npm-web,sharing=locked \
 
 COPY tsconfig.base.json ./
 COPY web/ web/
+
+# Stamped into the bundle so the app can name its own build and notice when the
+# browser and the proxy are running different ones. Defaults to `dev` for a
+# plain local build, which switches the version UI off.
+ARG APP_VERSION=dev
+ENV APP_VERSION=$APP_VERSION
 RUN npm run build --workspace web
 
 # --- runtime ---------------------------------------------------------------

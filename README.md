@@ -221,6 +221,10 @@ See [docs/SETUP.md](docs/SETUP.md) for the full runbook.
   JSON tagged by component — `http`, `upstream`, `cache`, `catalog`, `search` —
   so `docker logs … | jq 'select(.component=="upstream")'` shows exactly what
   left the machine. `LOG_LEVEL=debug` adds cache hits and misses.
+- **Versions:** both images are stamped with their build SHA; the proxy reports
+  its own at `/api/version` and the app compares it with the one baked into the
+  bundle. A waiting update shows a dismissible one-liner in the app and a full
+  account in Settings — nothing ever reloads itself mid-hint.
 - **Health:** `/healthz` on both containers, excluded from both access logs.
 
 ---

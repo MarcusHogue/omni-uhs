@@ -3,10 +3,24 @@ import { defineConfig } from 'vite';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  // The build this bundle came from, stamped in by the Docker build. `dev`
+  // locally, which switches the version UI off rather than showing noise.
+  define: {
+    __APP_VERSION__: JSON.stringify(process.env['APP_VERSION']?.trim() || 'dev'),
+  },
   plugins: [
     react(),
     VitePWA({
-      registerType: 'autoUpdate',
+      /*
+       * `prompt`, not `autoUpdate`.
+       *
+       * A reader that reloads itself out from under you mid-hint is worse than
+       * one that waits: the new service worker now sits in `waiting` until the
+       * user asks for it, which is what makes an "update available" indicator
+       * meaningful rather than a race with an automatic refresh.
+       */
+      registerType: 'prompt',
+      injectRegister: null,
       // The whole shell is precached: the app must cold-launch in airplane mode.
       workbox: {
         globPatterns: ['**/*.{js,css,html,svg,png,ico,webmanifest}'],

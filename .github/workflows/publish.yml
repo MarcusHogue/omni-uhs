@@ -15,6 +15,10 @@ jobs:
       contents: read
       packages: write
     strategy:
+      # The two images are independent. Without this, a transient failure in
+      # one cancels the other mid-build and a release publishes nothing --
+      # observed once already, from a Docker Hub timeout booting buildkit.
+      fail-fast: false
       matrix:
         include:
           - name: proxy
@@ -23,7 +27,16 @@ jobs:
             dockerfile: web/Dockerfile
     steps:
       - uses: actions/checkout@v7
+
+      # Booting buildkit pulls moby/buildkit from Docker Hub, which is
+      # rate-limited and times out often enough to matter. One retry turns the
+      # usual blip into a slow build instead of a failed release.
       - uses: docker/setup-buildx-action@v4
+        id: buildx
+        continue-on-error: true
+      - if: steps.buildx.outcome == 'failure'
+        name: Retry the buildx setup
+        uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
         with:
           registry: ghcr.io
@@ -49,6 +62,10 @@ jobs:
           context: .
           file: ${{ matrix.dockerfile }}
           push: true
+          # Baked into both images so the app can tell you which build you are
+          # running, and notice when the browser and the proxy disagree.
+          build-args: |
+            APP_VERSION=${{ steps.ns.outputs.short }}
           # `latest` for `docker compose pull`; the full and short SHA so a bad
           # deploy can be rolled back to a specific build by either name.
           tags: |

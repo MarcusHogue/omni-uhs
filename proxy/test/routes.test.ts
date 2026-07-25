@@ -60,7 +60,20 @@ describe('service basics', () => {
   it('answers /healthz', async () => {
     const response = await app.inject({ method: 'GET', url: '/healthz' });
     expect(response.statusCode).toBe(200);
-    expect(response.json()).toEqual({ status: 'ok' });
+    expect(response.json()).toMatchObject({ status: 'ok' });
+  });
+
+  it('reports its build on /api/version, uncached', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/version' });
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { version: string; startedAt: string };
+    // `dev` unless APP_VERSION was stamped in by the image build.
+    expect(typeof body.version).toBe('string');
+    expect(body.version.length).toBeGreaterThan(0);
+    expect(Number.isFinite(Date.parse(body.startedAt))).toBe(true);
+    // A cached version answer is worse than none: it would report the build
+    // that was running last time anyone asked.
+    expect(response.headers['cache-control']).toBe('no-store');
   });
 
   it('rejects anything that is not GET or HEAD', async () => {
