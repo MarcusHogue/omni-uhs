@@ -77,10 +77,21 @@ Workbench 1.3** and **DOS**.
 
 The retro themes are colour, type and chrome only — a theme is a block of CSS
 variables and nothing else, so it cannot change where you tap or how large the
-text is. Each one keeps the reading surface as a *window* on the desktop
-pattern, which is both what those systems actually did and the reason black
-Amiga text never ends up on Amiga blue. Text size is a separate setting, so
-Workbench at 20px is as readable as anything else.
+text is. Each one keeps the reading surface as a *window* inset on the desktop,
+which is both what those systems actually did and the reason black Amiga text
+never ends up on Amiga blue. Text size is a separate setting, so Workbench at
+20px is as readable as anything else.
+
+They are meant to be told apart at a glance, so each takes the one or two
+details that actually identified it: 95 has the teal desktop, the gradient title
+bar and a taskbar; 3.1 has a grey Program Manager desktop, a *flat* navy title
+bar, hard black bevels and a menu bar instead; System 7 has the striped drag
+bar, a hard drop shadow and a dithered Finder desktop; Mac OS 9 is pinstriped
+platinum; Workbench 1.3 is white windows with a hatched drag bar and orange
+selection on #0055AA; DOS is a blue text-mode screen inside a double-line box.
+
+Every text/background pair in every theme was measured at 4.5:1 or better —
+retro palettes are not an excuse for grey-on-blue.
 
 ---
 

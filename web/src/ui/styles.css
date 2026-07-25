@@ -50,6 +50,32 @@
   --title-bg: var(--chrome-bg);
   --title-text: var(--chrome-text);
 
+  /*
+   * Window-on-a-desktop tokens.
+   *
+   * `--bg` used to be invisible on a phone: the content filled the viewport, so
+   * Windows 95's teal and Workbench's blue never appeared and every retro theme
+   * collapsed into "grey page, coloured title bar". `--frame` insets the whole
+   * app so the desktop shows around it, which is both the historically right
+   * look and the thing that tells the themes apart at a glance. Zero on the
+   * modern themes, where there is no desktop to speak of.
+   */
+  --frame: 0px;
+  --frame-border: none;
+  --window-shadow: none;
+  --desktop-image: none;
+  /* Title bars carry most of a theme's personality: 95 has a gradient, System 7
+     has stripes, Workbench has a hatched drag bar. */
+  --title-image: none;
+  --title-label-bg: transparent;
+  --nav-bg: var(--chrome-bg);
+  --nav-shadow: none;
+  --nav-active-bg: var(--surface-2);
+  --nav-active-text: var(--accent);
+  /* Separate from --text-dim: a theme whose tab bar is not the page colour
+     (Workbench's white, DOS's cyan) needs its own resting label colour. */
+  --nav-text: var(--text-dim);
+
   --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-read: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
@@ -83,7 +109,13 @@
   color-scheme: light;
 }
 
-/* --- Windows 95 --------------------------------------------------------- */
+/*
+ * --- Windows 95 ---------------------------------------------------------
+ *
+ * Teal desktop, a raised grey window, and the gradient title bar that 95
+ * introduced. The tab row is the taskbar: raised, with the current screen
+ * pressed in.
+ */
 [data-theme='win95'] {
   --bg: #008080;
   /* Teal is the desktop; the content is a grey window with white listboxes. */
@@ -116,15 +148,34 @@
   --title-bg: #000080;
   --title-text: #ffffff;
   --title-accent: #c0c0c0;
+  /* The gradient is the single clearest "this is 95, not 3.1" signal. */
+  --title-image: linear-gradient(90deg, #000080 0%, #1084d0 100%);
+
+  --frame: 8px;
+  --window-shadow: inset -1px -1px #0a0a0a, inset 1px 1px #ffffff, inset -2px -2px #808080,
+    inset 2px 2px #dfdfdf;
+  --nav-bg: #c0c0c0;
+  --nav-shadow: inset 0 2px #dfdfdf, inset 0 -1px #0a0a0a;
+  --nav-text: #000000;
+  --nav-active-bg: #c0c0c0;
+  --nav-active-text: #000000;
 
   --font-ui: 'Segoe UI', Tahoma, 'MS Sans Serif', sans-serif;
   --font-read: 'Segoe UI', Tahoma, 'MS Sans Serif', sans-serif;
   color-scheme: light;
 }
 
-/* --- Windows 3.1 -------------------------------------------------------- */
+/*
+ * --- Windows 3.1 --------------------------------------------------------
+ *
+ * Everything 95 is not: a plain grey Program Manager desktop, a *flat* navy
+ * title bar, hard black-and-white bevels with no soft grey step, and a black
+ * window outline. There was no taskbar in 3.1, so the tab row is a menu bar —
+ * flat, ruled off in black, with the current screen highlighted the way a
+ * pulled-down menu title was.
+ */
 [data-theme='win31'] {
-  --bg: #a0a0a0;
+  --bg: #7f7f7f;
   --page: #c0c0c0;
   --page-text: #000000;
   --surface: #ffffff;
@@ -152,6 +203,17 @@
   --title-bg: #000080;
   --title-text: #ffffff;
   --title-accent: #c0c0c0;
+  /* Flat. No gradient — that is the whole point. */
+  --title-image: none;
+
+  --frame: 10px;
+  --frame-border: 2px solid #000000;
+  --window-shadow: inset -2px -2px #808080, inset 2px 2px #ffffff;
+  --nav-bg: #c0c0c0;
+  --nav-shadow: inset 0 -2px #000000;
+  --nav-text: #000000;
+  --nav-active-bg: #000080;
+  --nav-active-text: #ffffff;
 
   --font-ui: 'Segoe UI', Tahoma, 'MS Sans Serif', sans-serif;
   --font-read: 'Times New Roman', Georgia, serif;
@@ -187,6 +249,25 @@
   --card-shadow: 2px 2px 0 #000000;
   --title-bg: #ffffff;
   --title-text: #000000;
+  /* The six racing stripes of a System 7 drag bar, with the title on a solid
+     white pad punched through them. */
+  --title-image: repeating-linear-gradient(
+    180deg,
+    #000000 0 1px,
+    #ffffff 1px 3px
+  );
+  --title-label-bg: #ffffff;
+
+  --frame: 10px;
+  --frame-border: 1px solid #000000;
+  --window-shadow: 3px 3px 0 #000000;
+  /* 50% dither, the Finder desktop. */
+  --desktop-image: repeating-conic-gradient(#8f8f8f 0% 25%, #b6b6b6 0% 50%) 0 0 / 4px 4px;
+  --nav-bg: #ffffff;
+  --nav-shadow: inset 0 1px #000000;
+  --nav-text: #000000;
+  --nav-active-bg: #000000;
+  --nav-active-text: #ffffff;
 
   --font-ui: 'Lucida Grande', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --font-read: 'Lucida Grande', 'Helvetica Neue', Helvetica, Arial, sans-serif;
@@ -221,13 +302,34 @@
   --bevel-in: inset 1px 1px #999999, inset -1px -1px #ffffff;
   --title-bg: #cccccc;
   --title-text: #000000;
+  /* Platinum's pinstriped title bar: the same idea as System 7's stripes, but
+     soft grey rather than hard black. */
+  --title-image: linear-gradient(180deg, #e8e8e8, #bcbcbc),
+    repeating-linear-gradient(180deg, rgba(0, 0, 0, 0.11) 0 1px, transparent 1px 2px);
+  --title-label-bg: transparent;
+
+  --frame: 10px;
+  --frame-border: 1px solid #7a7a7a;
+  --window-shadow: 0 2px 6px rgba(0, 0, 0, 0.45);
+  --nav-bg: linear-gradient(180deg, #e2e2e2, #c4c4c4);
+  --nav-shadow: inset 0 1px #ffffff;
+  --nav-text: #1a1a1a;
+  --nav-active-bg: #3366cc;
+  --nav-active-text: #ffffff;
 
   --font-ui: 'Lucida Grande', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   --font-read: 'Lucida Grande', 'Helvetica Neue', Helvetica, Arial, sans-serif;
   color-scheme: light;
 }
 
-/* --- Amiga Workbench 1.3 ------------------------------------------------ */
+/*
+ * --- Amiga Workbench 1.3 ------------------------------------------------
+ *
+ * Four colours and no apologies: #0055aa, #ffffff, #000000, #ff8800. Workbench
+ * put white windows with a hard black outline on the blue screen, and the drag
+ * bar was white with *black* text and a hatched fill — not a coloured title bar
+ * with white text, which is what this used to do and is why it read as generic.
+ */
 [data-theme='workbench'] {
   --bg: #0055aa;
   /* Workbench put a white window on the blue desktop; so do we. */
@@ -254,9 +356,20 @@
   --border-w: 2px;
   --bevel-out: none;
   --bevel-in: none;
-  --title-bg: #0055aa;
-  --title-text: #ffffff;
+  --title-bg: #ffffff;
+  --title-text: #000000;
   --title-accent: #ff8800;
+  /* The hatched drag bar: one blue scanline every three pixels. */
+  --title-image: repeating-linear-gradient(180deg, #0055aa 0 1px, #ffffff 1px 3px);
+  --title-label-bg: #ffffff;
+
+  --frame: 8px;
+  --frame-border: 2px solid #000000;
+  --nav-bg: #ffffff;
+  --nav-shadow: inset 0 2px #000000;
+  --nav-text: #000000;
+  --nav-active-bg: #ff8800;
+  --nav-active-text: #000000;
 
   --font-ui: 'Courier New', ui-monospace, monospace;
   --font-read: 'Courier New', ui-monospace, monospace;
@@ -264,15 +377,23 @@
   color-scheme: light;
 }
 
-/* --- DOS ---------------------------------------------------------------- */
+/*
+ * --- DOS ----------------------------------------------------------------
+ *
+ * A text-mode TUI, not a black terminal: the *screen* is blue and the black is
+ * the CRT bezel around it. Panels are drawn with the double-line box character,
+ * which `border-style: double` gets close enough to.
+ */
 [data-theme='dos'] {
   --bg: #000000;
-  --page: #000000;
+  --page: #0000aa;
   --page-text: #aaaaaa;
   --surface: #0000aa;
-  --surface-2: #0000cc;
+  --surface-2: #000080;
   --text: #aaaaaa;
-  --text-dim: #7c7c7c;
+  /* Grey-on-blue is authentic and unreadable; light cyan is the colour a TUI
+     actually used for secondary text, and it clears 4.5:1. */
+  --text-dim: #55ffff;
   --accent: #ffff55;
   --accent-text: #000000;
   --accent-soft: #000088;
@@ -293,6 +414,14 @@
   --title-bg: #00aaaa;
   --title-text: #000000;
   --title-accent: #000055;
+
+  --frame: 12px;
+  --frame-border: 3px double #aaaaaa;
+  --nav-bg: #00aaaa;
+  --nav-shadow: none;
+  --nav-text: #000055;
+  --nav-active-bg: #000000;
+  --nav-active-text: #ffff55;
 
   --font-ui: 'Courier New', ui-monospace, monospace;
   --font-read: 'Courier New', ui-monospace, monospace;
@@ -325,7 +454,7 @@ html,
 body {
   margin: 0;
   padding: 0;
-  background: var(--bg);
+  background: var(--bg) var(--desktop-image);
   color: var(--text);
   font-family: var(--font-ui);
   font-size: var(--size-base);
@@ -339,17 +468,26 @@ a {
   color: var(--accent);
 }
 
+/*
+ * The app *is* the window. Inset by `--frame`, the desktop shows around it;
+ * with `--frame: 0` (every modern theme) this collapses to exactly what it was.
+ */
 .app {
-  min-height: 100dvh;
   display: flex;
   flex-direction: column;
+  margin: var(--frame);
+  min-height: calc(100dvh - 2 * var(--frame));
+  background: var(--page);
+  color: var(--page-text);
+  border: var(--frame-border);
+  box-shadow: var(--window-shadow);
 }
 
 /* --- chrome that gets out of the way ------------------------------------ */
 
 .app-header {
   position: sticky;
-  top: 0;
+  top: var(--frame);
   z-index: 20;
   display: flex;
   align-items: center;
@@ -359,6 +497,7 @@ a {
   /* The header is the window's title bar — which is where most of a retro
      theme's personality lives. */
   background: var(--title-bg);
+  background-image: var(--title-image);
   color: var(--title-text);
   border-bottom: 1px solid var(--chrome-line);
   transition: transform 0.22s ease;
@@ -369,6 +508,10 @@ a {
   font-weight: 600;
   margin: 0;
   letter-spacing: 0.02em;
+  /* Themes whose title bar is a pattern (System 7's stripes, Workbench's
+     hatching) punch a solid pad through it so the name stays readable. */
+  background: var(--title-label-bg);
+  padding: 0 6px;
 }
 
 .app-header .wordmark {
@@ -390,19 +533,18 @@ a {
   max-width: 720px;
   margin: 0 auto;
   padding: 12px 16px 96px;
-  background: var(--page);
-  color: var(--page-text);
 }
 
 .tabbar {
   position: fixed;
-  bottom: 0;
-  left: 0;
-  right: 0;
+  bottom: var(--frame);
+  left: var(--frame);
+  right: var(--frame);
   z-index: 20;
   display: grid;
   grid-template-columns: repeat(4, 1fr);
-  background: var(--chrome-bg);
+  background: var(--nav-bg);
+  box-shadow: var(--nav-shadow);
   border-top: 1px solid var(--chrome-line);
   padding-bottom: env(safe-area-inset-bottom);
   transition: transform 0.22s ease;
@@ -411,14 +553,14 @@ a {
 .tabbar a {
   padding: 13px 4px;
   text-align: center;
-  color: var(--text-dim);
+  color: var(--nav-text);
   text-decoration: none;
   font-size: 13px;
 }
 
 .tabbar a.active {
-  color: var(--accent);
-  background: var(--surface-2);
+  color: var(--nav-active-text);
+  background: var(--nav-active-bg);
   box-shadow: var(--bevel-in);
 }
 
