@@ -1,0 +1,98 @@
+{
+  "document": {
+    "id": "uhs-23d0e3e971f68a99",
+    "game": {
+      "title": "Cave of Tests"
+    },
+    "source": {
+      "kind": "uhs",
+      "url": "fixture://tiny88a.uhs",
+      "license": "proprietary-personal-use",
+      "personalUseOnly": true
+    },
+    "fetchedAt": "2026-01-01T00:00:00.000Z",
+    "root": {
+      "id": "uhs88:0",
+      "type": "subject",
+      "label": "Cave of Tests",
+      "children": [
+        {
+          "id": "uhs88:1",
+          "type": "subject",
+          "label": "Chapter One",
+          "children": [
+            {
+              "id": "uhs88:5",
+              "type": "hints",
+              "label": "How do I open the door?",
+              "hints": [
+                {
+                  "id": "uhs88:11",
+                  "type": "hint",
+                  "content": [
+                    {
+                      "kind": "run",
+                      "text": "Have you tried the handle?"
+                    }
+                  ]
+                },
+                {
+                  "id": "uhs88:12",
+                  "type": "hint",
+                  "content": [
+                    {
+                      "kind": "run",
+                      "text": "The handle is stuck; oil it."
+                    }
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "uhs88:7",
+              "type": "hints",
+              "label": "Where is the key?",
+              "hints": [
+                {
+                  "id": "uhs88:13",
+                  "type": "hint",
+                  "content": [
+                    {
+                      "kind": "run",
+                      "text": "Under the mat."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "id": "uhs88:3",
+          "type": "subject",
+          "label": "Chapter Two",
+          "children": [
+            {
+              "id": "uhs88:9",
+              "type": "hints",
+              "label": "What now?",
+              "hints": [
+                {
+                  "id": "uhs88:14",
+                  "type": "hint",
+                  "content": [
+                    {
+                      "kind": "run",
+                      "text": "Go north twice."
+                    }
+                  ]
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "warnings": []
+}

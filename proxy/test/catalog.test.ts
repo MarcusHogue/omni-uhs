@@ -1,0 +1,276 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
+import { Cache } from '../src/cache/index.js';
+import { parseMasterIndex } from '../src/catalog/ifarchive.js';
+import { parseIfdbSearch } from '../src/catalog/ifdb.js';
+import { parseAllPages, parseRightsInfo, parseWikiSearch, apiUrl } from '../src/catalog/mediawiki.js';
+import { NORMALIZE_VECTORS, normalizeTitle } from '../src/catalog/normalize.js';
+import { groupEntries } from '../src/catalog/search.js';
+import type { CatalogEntry } from '../src/catalog/types.js';
+import { parseIndexHtml, parseUpdateCgi, searchUhsCatalog } from '../src/catalog/uhs.js';
+
+describe('title normalization', () => {
+  for (const [input, expected] of NORMALIZE_VECTORS) {
+    it(`${JSON.stringify(input)} -> ${JSON.stringify(expected)}`, () => {
+      expect(normalizeTitle(input)).toBe(expected);
+    });
+  }
+
+  it('groups "The Longest Journey" with "Longest Journey, The"', () => {
+    expect(normalizeTitle('The Longest Journey')).toBe(normalizeTitle('Longest Journey, The'));
+  });
+});
+
+describe('uhs catalog parsing', () => {
+  const sample = `
+<FILE><FTITLE>The 11th Hour</FTITLE>
+<FURL>http://www.uhs-hints.com/rfiles/11thhour.zip</FURL>
+<FNAME>11thhour.uhs</FNAME><FDATE>23-Jan-96</FDATE>
+<FSIZE>25024</FSIZE>
+<FFULLSIZE>51278</FFULLSIZE></FILE>
+<FILE><FTITLE>Zork I: The Great Underground Empire</FTITLE>
+<FURL>http://www.uhs-hints.com/rfiles/zork1.zip</FURL>
+<FNAME>zork1.uhs</FNAME><FDATE>02-Feb-97</FDATE>
+<FSIZE>9562</FSIZE>
+<FFULLSIZE>22830</FFULLSIZE></FILE>`;
+
+  it('reads every record', () => {
+    const entries = parseUpdateCgi(sample);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]!.title).toBe('The 11th Hour');
+    expect(entries[0]!.fileName).toBe('11thhour.uhs');
+    expect(entries[0]!.meta?.size).toBe(25024);
+  });
+
+  it('upgrades the advertised http URLs to https', () => {
+    expect(parseUpdateCgi(sample)[0]!.ref).toBe('https://www.uhs-hints.com/rfiles/11thhour.zip');
+  });
+
+  it('normalizes titles for grouping', () => {
+    expect(parseUpdateCgi(sample)[0]!.normalizedTitle).toBe('11th hour');
+  });
+
+  it('ignores malformed records rather than throwing', () => {
+    expect(parseUpdateCgi('<FILE><FTITLE>No URL</FTITLE></FILE>')).toEqual([]);
+    expect(parseUpdateCgi('not xml at all')).toEqual([]);
+  });
+
+  it('falls back to scraping the index page', () => {
+    const html = `
+      <table>
+        <tr><td><a href="/rfiles/myst.zip">Myst</a></td></tr>
+        <tr><td><a href="https://www.uhs-hints.com/rfiles/riven.zip"><b>Riven</b>: Sequel to Myst</a></td></tr>
+        <tr><td><a href="/hints/other.html">Not a hint file</a></td></tr>
+      </table>`;
+    const entries = parseIndexHtml(html);
+    expect(entries.map((e) => e.title)).toEqual(['Myst', 'Riven: Sequel to Myst']);
+    expect(entries[0]!.ref).toBe('https://www.uhs-hints.com/rfiles/myst.zip');
+    expect(entries[1]!.fileName).toBe('riven.uhs');
+  });
+});
+
+describe('uhs catalog storage', () => {
+  let dir: string;
+  let cache: Cache;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hint-catalog-'));
+    cache = new Cache(dir);
+    const insert = cache.db.prepare(
+      `INSERT INTO catalog (source, ref, title, normalized_title, meta, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    );
+    for (const [title, ref] of [
+      ['Zork I: The Great Underground Empire', 'https://x/zork1.zip'],
+      ['Zork II: The Wizard of Frobozz', 'https://x/zork2.zip'],
+      ['Myst', 'https://x/myst.zip'],
+    ] as const) {
+      insert.run('uhs', ref, title, normalizeTitle(title), '{}', Date.now());
+    }
+  });
+
+  afterEach(() => {
+    cache.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('searches the local copy without any network access', () => {
+    const results = searchUhsCatalog(cache, 'zork');
+    expect(results.map((r) => r.title)).toEqual([
+      'Zork I: The Great Underground Empire',
+      'Zork II: The Wizard of Frobozz',
+    ]);
+  });
+
+  it('matches case-insensitively and ignores punctuation', () => {
+    expect(searchUhsCatalog(cache, 'MYST!').map((r) => r.title)).toEqual(['Myst']);
+  });
+
+  it('treats LIKE wildcards in the query as literal text', () => {
+    expect(searchUhsCatalog(cache, '%')).toEqual([]);
+  });
+});
+
+describe('IF Archive master index', () => {
+  const xml = `
+<ifarchive>
+<file><name>zork1.sol</name><directory>if-archive/solutions</directory>
+<path>if-archive/solutions/zork1.sol</path><size>1234</size><date>01-Jan-2000</date></file>
+<file><name>AMFV.inv</name><directory>if-archive/infocom/hints/invisiclues</directory>
+<path>if-archive/infocom/hints/invisiclues/AMFV.inv</path><size>32404</size></file>
+<file><name>soundtrack.zip</name><directory>if-archive/solutions</directory>
+<path>if-archive/solutions/soundtrack.zip</path><size>999</size></file>
+<file><name>game.z5</name><directory>if-archive/games/zcode</directory>
+<path>if-archive/games/zcode/game.z5</path><size>500</size></file>
+</ifarchive>`;
+
+  it('indexes only the hint-bearing directories', () => {
+    const entries = parseMasterIndex(xml);
+    expect(entries.map((e) => e.ref)).toEqual([
+      'if-archive/solutions/zork1.sol',
+      'if-archive/infocom/hints/invisiclues/AMFV.inv',
+    ]);
+  });
+
+  it('skips archives and binaries it cannot read', () => {
+    expect(parseMasterIndex(xml).some((e) => e.ref.endsWith('.zip'))).toBe(false);
+  });
+
+  it('derives a readable title from the filename', () => {
+    expect(parseMasterIndex(xml)[0]!.title).toBe('zork1');
+  });
+});
+
+describe('IFDB', () => {
+  it('parses the search JSON', () => {
+    const json = JSON.stringify({
+      games: [
+        { tuid: 'abc123', title: 'Zork', published: { machine: '1979' } },
+        { tuid: 'def456', title: "Zork: A Troll's-Eye View" },
+        { title: 'no tuid' },
+      ],
+    });
+    const entries = parseIfdbSearch(json);
+    expect(entries).toHaveLength(2);
+    expect(entries[0]).toMatchObject({ sourceKind: 'ifdb', ref: 'abc123', meta: { year: 1979 } });
+  });
+
+  it('returns nothing for a Cloudflare challenge page instead of throwing', () => {
+    expect(parseIfdbSearch('<!DOCTYPE html><title>Just a moment...</title>')).toEqual([]);
+  });
+});
+
+describe('MediaWiki', () => {
+  it('adds maxlag and formatversion to every API call', () => {
+    const url = new URL(apiUrl('https://strategywiki.org/w/api.php', { action: 'query' }));
+    expect(url.searchParams.get('maxlag')).toBe('5');
+    expect(url.searchParams.get('formatversion')).toBe('2');
+    expect(url.searchParams.get('format')).toBe('json');
+  });
+
+  it('groups sub-page hits under the game title', () => {
+    const json = JSON.stringify({
+      query: {
+        search: [
+          { title: 'Chrono Trigger/Walkthrough' },
+          { title: 'Chrono Trigger/Sidequests' },
+          { title: 'Chrono Cross' },
+        ],
+      },
+    });
+    const entries = parseWikiSearch(json, 'strategywiki');
+    expect(entries.map((e) => e.title)).toEqual(['Chrono Trigger', 'Chrono Cross']);
+    expect(entries[0]!.ref).toBe('Chrono Trigger/Walkthrough');
+  });
+
+  it('parses an allpages listing', () => {
+    const json = JSON.stringify({
+      query: { allpages: [{ title: 'Myst/Walkthrough' }, { title: 'Myst/Channelwood' }] },
+    });
+    expect(parseAllPages(json, 'strategywiki').map((e) => e.ref)).toEqual([
+      'Myst/Walkthrough',
+      'Myst/Channelwood',
+    ]);
+  });
+
+  it('recognises CC-BY-SA and lets it be exported', () => {
+    const info = parseRightsInfo(
+      JSON.stringify({
+        query: {
+          rightsinfo: {
+            url: 'https://creativecommons.org/licenses/by-sa/4.0/',
+            text: 'Creative Commons Attribution-ShareAlike 4.0',
+          },
+        },
+      }),
+    );
+    expect(info.license).toBe('CC-BY-SA-4.0');
+    expect(info.personalUseOnly).toBe(false);
+  });
+
+  it('forces personal-use-only for a -NC license', () => {
+    const info = parseRightsInfo(
+      JSON.stringify({
+        query: {
+          rightsinfo: {
+            url: 'https://creativecommons.org/licenses/by-nc-sa/3.0/',
+            text: 'CC BY-NC-SA 3.0',
+          },
+        },
+      }),
+    );
+    expect(info.personalUseOnly).toBe(true);
+  });
+
+  it('treats an unknown or unreadable license as personal-use-only', () => {
+    expect(parseRightsInfo('garbage').personalUseOnly).toBe(true);
+    expect(parseRightsInfo(JSON.stringify({ query: {} })).personalUseOnly).toBe(true);
+  });
+});
+
+describe('cross-source grouping', () => {
+  const entry = (sourceKind: CatalogEntry['sourceKind'], title: string): CatalogEntry => ({
+    sourceKind,
+    title,
+    normalizedTitle: normalizeTitle(title),
+    ref: `${sourceKind}:${title}`,
+  });
+
+  it('merges the same game from several sources into one group', () => {
+    const groups = groupEntries(
+      [
+        entry('uhs', 'The Longest Journey'),
+        entry('strategywiki', 'Longest Journey, The'),
+        entry('ifdb', 'Myst'),
+      ],
+      'longest journey',
+    );
+    expect(groups).toHaveLength(2);
+    expect(groups[0]!.entries.map((e) => e.sourceKind).sort()).toEqual(['strategywiki', 'uhs']);
+  });
+
+  it('prefers the most descriptive title in a group', () => {
+    const groups = groupEntries(
+      [entry('uhs', 'Zork I'), entry('ifdb', 'Zork I')],
+      'zork',
+    );
+    expect(groups[0]!.title).toBe('Zork I');
+  });
+
+  it('puts an exact match first', () => {
+    const groups = groupEntries(
+      [entry('uhs', 'Zork I: The Great Underground Empire'), entry('uhs', 'Zork')],
+      'zork',
+    );
+    expect(groups[0]!.title).toBe('Zork');
+  });
+
+  it('caps the number of groups', () => {
+    const many = Array.from({ length: 120 }, (_, i) => entry('uhs', `Game ${i}`));
+    expect(groupEntries(many, 'game').length).toBeLessThanOrEqual(50);
+  });
+});
