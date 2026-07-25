@@ -144,7 +144,45 @@ around.
 
 ---
 
-## 5. Updating
+## 5. The images
+
+Two, both on GitHub Container Registry:
+
+```
+ghcr.io/marcushogue/omni-uhs-web:latest      # Caddy + the built PWA
+ghcr.io/marcushogue/omni-uhs-proxy:latest    # Fastify cache/allowlist proxy
+```
+
+Every build is also tagged with its commit SHA (`…:1978cd7…`), so a bad deploy
+can be pinned back to a known-good one. Browse them at
+<https://github.com/MarcusHogue?tab=packages>.
+
+They are published by `.github/workflows/publish.yml` **on push to `main`
+only** — until this branch merges, the tags above do not exist yet and
+`docker compose pull` will 404. Build from source in the meantime:
+
+```bash
+docker compose -f docker-compose.local.yml up -d --build
+```
+
+### Authentication
+
+This repository is private, so its packages are private too and pulling needs a
+login. Create a classic PAT with the **`read:packages`** scope
+(<https://github.com/settings/tokens>), then:
+
+```bash
+echo "$GHCR_PAT" | docker login ghcr.io -u MarcusHogue --password-stdin
+```
+
+Alternatively, make each package public — package page → Package settings →
+Change visibility. The images contain no hint content and no secrets, only the
+app itself, so public is a reasonable choice and removes the login step from
+every machine that runs this.
+
+---
+
+## 6. Updating
 
 Images are published to GHCR on every push to `main`:
 
@@ -162,7 +200,7 @@ them, while the content-hashed assets are cached for a year.
 
 ---
 
-## 6. Troubleshooting
+## 7. Troubleshooting
 
 **The proxy container restarts in a loop.** Check `docker compose logs proxy`.
 An `EACCES … /data/cache` means the volume was created by an older build; the
@@ -186,6 +224,6 @@ from the Home Screen icon. See §2.
 
 ---
 
-## 7. Synology NAS
+## 8. Synology NAS
 
 See **[SYNOLOGY.md](SYNOLOGY.md)**.
