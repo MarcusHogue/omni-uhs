@@ -18,7 +18,7 @@ import Database from 'better-sqlite3';
 
 import { config } from '../config.js';
 import { SingleFlight } from '../upstream/limiter.js';
-import { fetchUpstream, type UpstreamRequest } from '../upstream/fetch.js';
+import { describeUpstreamRejection, fetchUpstream, type UpstreamRequest } from '../upstream/fetch.js';
 
 export interface CacheEntry {
   key: string;
@@ -252,16 +252,26 @@ export class Cache {
       }
 
       if (!response.ok) {
+        const rejection = describeUpstreamRejection(
+          new URL(request.url).hostname,
+          response,
+        );
         await response.body?.cancel();
         if (recheck) {
           // Upstream is unhappy but we have something. Serving stale beats
           // failing: these files do not change.
           return { ...recheck, fromCache: true, revalidated: true };
         }
-        const error = new Error(`Upstream responded ${response.status}`) as Error & {
+        const error = new Error(
+          rejection ?? `Upstream responded ${response.status}`,
+        ) as Error & {
           statusCode: number;
+          upstreamChallenge?: boolean;
         };
         error.statusCode = response.status === 404 ? 404 : 502;
+        // Machine-readable so the browser can decide to try the site itself:
+        // the challenge is aimed at servers, and the user's browser may pass it.
+        if (rejection) error.upstreamChallenge = true;
         throw error;
       }
 

@@ -204,8 +204,31 @@ volumes (what both compose files here use) never hit this: the image seeds
 
 **Search returns warnings about a source.** That is the designed behaviour: a
 source that is unreachable names itself in `warnings[]` and the others still
-return. StrategyWiki in particular sits behind Cloudflare and will refuse
-requests from datacenter IP ranges — it works from a home connection.
+return.
+
+**StrategyWiki says it is behind a Cloudflare challenge.** It is, and there is
+nothing to fix. `strategywiki.org` answers every server-side request with a
+managed challenge — a JavaScript and browser-fingerprint test that no HTTP
+client can pass, from any IP, with any User-Agent. So:
+
+- StrategyWiki is **off by default** (`SEARCH_SOURCES`). Turn the chip on in
+  Search if you want to try it.
+- When it is on and the proxy is challenged, the app **retries from your
+  browser**, which is the client Cloudflare is actually willing to serve. That
+  often works, and when it does the warning disappears and the results merge in
+  normally.
+- If the browser is challenged too, every row still links out to the page.
+
+The clearance token cannot be shared between the two: Cloudflare binds it to the
+requesting IP and User-Agent, so one your phone earns is worthless to the NAS.
+That is why the browser makes the request itself rather than handing something
+back to the proxy.
+
+**IFDB rows have a "View" link instead of a Download button.** IFDB is a
+catalogue of interactive fiction, not a hint source — there is no file to
+download. Its page usually points at the walkthrough on the IF Archive, which
+*is* downloadable. For the same reason IFDB does not appear under Browse: it
+publishes no index to page through.
 
 **Downloads fail with "not allowed".** The proxy enforces a hostname allowlist
 (`UPSTREAM_ALLOWLIST`). That is the SSRF boundary; add the host deliberately or

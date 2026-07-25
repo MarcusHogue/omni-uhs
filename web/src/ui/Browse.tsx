@@ -40,6 +40,14 @@ function SourcePicker(): JSX.Element {
           </Link>
         </li>
       </ul>
+      {/* Asked often enough to be worth answering here: IFDB is missing on
+          purpose, not by oversight. */}
+      <p className="muted">
+        IFDB is search-only. It is a catalogue of interactive fiction rather than a hint
+        source — there is nothing to download from it, and it publishes no index to page
+        through. Its search results link out to the game&rsquo;s IFDB page, which usually
+        points at the walkthrough on the IF Archive.
+      </p>
     </div>
   );
 }
@@ -69,6 +77,18 @@ function SourceListing({ source }: { source: string }): JSX.Element {
         const response = await api.list(source, prefix, signal);
         setEntries(response.entries);
         setWarnings(response.warnings);
+
+        // The proxy was bot-challenged. Try the same listing from the browser,
+        // which the upstream is far more willing to serve.
+        if (response.challenged?.includes('strategywiki')) {
+          try {
+            const direct = await api.listStrategyWikiDirect(prefix, signal);
+            setEntries(direct);
+            setWarnings([]);
+          } catch {
+            // Challenged here too; the server's warning already says so.
+          }
+        }
       } catch (caught) {
         if ((caught as Error).name === 'AbortError') return;
         setEntries([]);

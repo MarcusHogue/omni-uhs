@@ -9,7 +9,7 @@ import { parseMasterIndex } from '../src/catalog/ifarchive.js';
 import { parseIfdbSearch } from '../src/catalog/ifdb.js';
 import { parseAllPages, parseRightsInfo, parseWikiSearch, apiUrl } from '../src/catalog/mediawiki.js';
 import { NORMALIZE_VECTORS, normalizeTitle } from '../src/catalog/normalize.js';
-import { groupEntries } from '../src/catalog/search.js';
+import { describeSources, groupEntries } from '../src/catalog/search.js';
 import type { CatalogEntry } from '../src/catalog/types.js';
 import { parseIndexHtml, parseUpdateCgi, searchUhsCatalog } from '../src/catalog/uhs.js';
 
@@ -249,8 +249,22 @@ describe('cross-source grouping', () => {
       ],
       'longest journey',
     );
-    expect(groups).toHaveLength(2);
+    // Myst is dropped: it does not match the query at all, and something else did.
+    expect(groups).toHaveLength(1);
     expect(groups[0]!.entries.map((e) => e.sourceKind).sort()).toEqual(['strategywiki', 'uhs']);
+  });
+
+  it('keeps unrelated entries out of the results entirely', () => {
+    const groups = groupEntries(
+      [entry('uhs', 'The Longest Journey'), entry('ifdb', 'Myst')],
+      'longest journey',
+    );
+    expect(groups.map((g) => g.title)).not.toContain('Myst');
+  });
+
+  it('but shows the near-misses when nothing matched, rather than nothing at all', () => {
+    const groups = groupEntries([entry('ifdb', 'Trinity'), entry('ifdb', 'Unity!')], 'triniti');
+    expect(groups).toHaveLength(2);
   });
 
   it('prefers the most descriptive title in a group', () => {
@@ -272,5 +286,87 @@ describe('cross-source grouping', () => {
   it('caps the number of groups', () => {
     const many = Array.from({ length: 120 }, (_, i) => entry('uhs', `Game ${i}`));
     expect(groupEntries(many, 'game').length).toBeLessThanOrEqual(50);
+  });
+});
+
+describe('search relevance', () => {
+  const entry = (
+    sourceKind: CatalogEntry['sourceKind'],
+    title: string,
+    ref = `${sourceKind}:${title}`,
+  ): CatalogEntry => ({
+    sourceKind,
+    title,
+    normalizedTitle: normalizeTitle(title),
+    ref,
+  });
+
+  const titles = (entries: CatalogEntry[], query: string): string[] =>
+    groupEntries(entries, query).map((group) => group.title);
+
+  it('ranks a prefix match above a mere substring', () => {
+    const order = titles(
+      [entry('uhs', 'The Secret of Monkey Island'), entry('uhs', 'Monkey Island 2')],
+      'monkey island',
+    );
+    expect(order[0]).toBe('Monkey Island 2');
+  });
+
+  it('does not let file count outrank the title you typed', () => {
+    // The old ordering sorted by group size, so four IF Archive files for a
+    // loosely-matching game buried the exact hit.
+    const noisy = ['a.txt', 'b.txt', 'c.txt', 'd.txt'].map((file) =>
+      entry('ifarchive', 'Zork Zero Hints', `if-archive/solutions/${file}`),
+    );
+    expect(titles([...noisy, entry('uhs', 'Zork')], 'zork')[0]).toBe('Zork');
+  });
+
+  it('prefers the shorter of two matches that both start with the query', () => {
+    const order = titles(
+      [entry('uhs', 'Zork: The Undiscovered Underground'), entry('uhs', 'Zork II')],
+      'zork',
+    );
+    expect(order[0]).toBe('Zork II');
+  });
+
+  it('groups a filename stem with its properly spelled sibling', () => {
+    const groups = groupEntries(
+      [entry('ifarchive', 'beyondzork', 'if-archive/solutions/beyondzork.sol'),
+       entry('uhs', 'Beyond Zork')],
+      'beyond zork',
+    );
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.title).toBe('Beyond Zork');
+  });
+
+  it('sinks a group that only IFDB knows about', () => {
+    const order = titles(
+      [entry('ifdb', 'Trinity Redux'), entry('uhs', 'Trinity Redux II')],
+      'trinity',
+    );
+    expect(order[0]).toBe('Trinity Redux II');
+  });
+
+  it('lists the readable source first inside a group', () => {
+    const groups = groupEntries(
+      [entry('ifdb', 'Trinity'), entry('uhs', 'Trinity'), entry('ifarchive', 'Trinity')],
+      'trinity',
+    );
+    expect(groups[0]!.entries.map((e) => e.sourceKind)).toEqual(['uhs', 'ifarchive', 'ifdb']);
+  });
+});
+
+describe('source advertisement', () => {
+  it('marks StrategyWiki as off by default and says why', () => {
+    const strategywiki = describeSources().find((source) => source.kind === 'strategywiki');
+    expect(strategywiki?.enabledByDefault).toBe(false);
+    expect(strategywiki?.note).toMatch(/Cloudflare/);
+  });
+
+  it('still advertises it as searchable, so it can be turned on', () => {
+    expect(describeSources().map((source) => source.kind)).toContain('strategywiki');
+    expect(describeSources().filter((source) => source.enabledByDefault).map((s) => s.kind)).toEqual(
+      ['uhs', 'ifarchive', 'ifdb'],
+    );
   });
 });

@@ -13,11 +13,53 @@ import { searchIfArchive, refreshIfArchiveCatalog } from './ifarchive.js';
 import { searchIfdb } from './ifdb.js';
 import { STRATEGYWIKI, searchWiki } from './mediawiki.js';
 import { refreshUhsCatalog, searchUhsCatalog } from './uhs.js';
+import { normalizeTitle } from './normalize.js';
 import type { CatalogEntry, CatalogGroup, SearchResponse, SourceKind } from './types.js';
 
+/** Every source the fan-out knows how to query. */
 export const SEARCHABLE_SOURCES: SourceKind[] = ['uhs', 'ifarchive', 'strategywiki', 'ifdb'];
 
+/**
+ * What a search hits when the caller does not say.
+ *
+ * StrategyWiki is deliberately absent: it sits behind a Cloudflare managed
+ * challenge that no HTTP client can pass (see `describeUpstreamRejection`), so
+ * including it by default means every single search returns a warning about a
+ * source that structurally cannot work. It stays fully implemented and is still
+ * queried when asked for explicitly — `?sources=strategywiki` — or when
+ * SEARCH_SOURCES lists it, so nothing is lost the day that changes.
+ */
+export const DEFAULT_SEARCH_SOURCES: SourceKind[] = config.searchSources;
+
 const MAX_GROUPS = 50;
+
+export interface SourceInfo {
+  kind: SourceKind;
+  /** On by default, i.e. searched when the request names no sources. */
+  enabledByDefault: boolean;
+  /** Shown next to the chip when there is something the user should know. */
+  note?: string;
+}
+
+const SOURCE_NOTES: Partial<Record<SourceKind, string>> = {
+  strategywiki:
+    'Behind a Cloudflare managed challenge that only a real browser can pass, ' +
+    'so a server cannot read it. Off by default; turn it on to try anyway.',
+  ifdb: 'A catalogue, not a hint source — it tells you a game exists, but the ' +
+    'hints come from UHS or the IF Archive.',
+};
+
+/** What the UI needs to render the source chips without hard-coding policy. */
+export function describeSources(): SourceInfo[] {
+  return SEARCHABLE_SOURCES.map((kind) => {
+    const note = SOURCE_NOTES[kind];
+    return {
+      kind,
+      enabledByDefault: DEFAULT_SEARCH_SOURCES.includes(kind),
+      ...(note ? { note } : {}),
+    };
+  });
+}
 
 /** Cap a source's work so one slow upstream cannot stall the response. */
 async function withTimeout<T>(label: string, ms: number, work: Promise<T>): Promise<T> {
@@ -52,45 +94,165 @@ const RUNNERS: Record<SourceKind, SourceRunner | undefined> = {
 };
 
 /**
- * Pick the nicest display title in a group: the longest one wins, since
- * "Zork I: The Great Underground Empire" is more useful than "Zork I".
+ * Pick the nicest display title in a group.
+ *
+ * Prefer a title with real word breaks over a filename stem — "Beyond Zork"
+ * beats "beyondzork" even though the latter may be longer — and among equals
+ * prefer the more descriptive one.
  */
 function bestTitle(entries: CatalogEntry[]): string {
-  return entries.reduce((best, entry) => (entry.title.length > best.length ? entry.title : best), '');
+  const rank = (title: string): number => {
+    const words = title.trim().split(/\s+/).length;
+    const looksLikeFilename = !title.includes(' ') && /^[a-z0-9._-]+$/.test(title);
+    return (looksLikeFilename ? -1000 : 0) + words * 100 + Math.min(title.length, 60);
+  };
+  return entries.reduce(
+    (best, entry) => (rank(entry.title) > rank(best) ? entry.title : best),
+    entries[0]?.title ?? '',
+  );
+}
+
+/**
+ * Grouping key.
+ *
+ * Spaces are dropped so a filename stem lands with its properly-spelled
+ * sibling: the IF Archive's `beyondzork.sol` becomes "beyondzork", which is the
+ * same game as UHS's "Beyond Zork" and should not be a second result. Two
+ * genuinely different games whose titles differ only in spacing would collide,
+ * which has not come up and would be the lesser problem anyway.
+ */
+function groupKey(normalizedTitle: string): string {
+  return normalizedTitle.replace(/\s+/g, '');
+}
+
+/** How useful a source is when the same game appears in several. */
+const SOURCE_WEIGHT: Record<SourceKind, number> = {
+  uhs: 30, // curated titles, real progressive hints
+  ifarchive: 20, // the real thing for IF, but filename-derived titles
+  strategywiki: 15,
+  ifdb: 5, // metadata only — you cannot read hints from it
+  fandom: 10,
+  wikigg: 10,
+};
+
+const words = (text: string): string[] => text.split(/\s+/).filter(Boolean);
+
+/**
+ * Relevance score for one group against the query.
+ *
+ * The old ordering was "exact match, then whichever group had the most
+ * entries" — which floated any game with four IF Archive files above the one
+ * you actually typed. Matching quality now dominates, and everything else is a
+ * tie-breaker.
+ */
+/**
+ * How well the title matches the query, ignoring everything else.
+ *
+ * `NO_MATCH` means the query does not appear in the title at all. Only IFDB
+ * produces those — its search is fuzzy, so a query for "trinity" comes back
+ * with "Unity!" and "Masterclass" — and they are dropped when anything real
+ * matched.
+ */
+export const NO_MATCH = 50;
+
+export function baseScore(normalizedTitle: string, normalizedQuery: string): number {
+  const title = groupKey(normalizedTitle);
+  const query = groupKey(normalizedQuery);
+  if (title === query) return 1000;
+  if (title.startsWith(query)) return 700;
+  if (new RegExp(`\\b${escapeRegExp(normalizedQuery)}`).test(normalizedTitle)) return 500;
+  if (title.includes(query)) return 250;
+  return NO_MATCH;
+}
+
+export function scoreGroup(group: CatalogGroup, normalizedQuery: string): number {
+  const title = groupKey(group.normalizedTitle);
+  const query = groupKey(normalizedQuery);
+  const spacedTitle = group.normalizedTitle;
+  const queryWords = words(normalizedQuery);
+
+  let score = baseScore(group.normalizedTitle, normalizedQuery);
+
+  // Every query word present as a whole word is worth more than the same
+  // letters buried in a longer string.
+  const matchedWords = queryWords.filter((word) =>
+    new RegExp(`\\b${escapeRegExp(word)}\\b`).test(spacedTitle),
+  ).length;
+  if (queryWords.length > 0) score += (matchedWords / queryWords.length) * 150;
+
+  // Prefer the tighter match: "Zork" over "Zork: The Undiscovered Underground".
+  score -= Math.min(80, Math.max(0, title.length - query.length) * 2);
+
+  // Where you can actually read the hints matters more than how many hits.
+  score += Math.max(...group.entries.map((e) => SOURCE_WEIGHT[e.sourceKind] ?? 0));
+  const distinctSources = new Set(group.entries.map((e) => e.sourceKind)).size;
+  score += Math.min(distinctSources - 1, 2) * 8;
+
+  // A group that is only an IFDB row cannot be downloaded at all, so it should
+  // never sit above something you can actually read — the penalty is bigger
+  // than the gap between any two match qualities below "exact".
+  if (group.entries.every((e) => e.sourceKind === 'ifdb')) score -= 200;
+
+  return score;
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Within a group, list the sources you can actually read first. */
+function orderEntries(entries: CatalogEntry[]): CatalogEntry[] {
+  return [...entries].sort(
+    (a, b) =>
+      (SOURCE_WEIGHT[b.sourceKind] ?? 0) - (SOURCE_WEIGHT[a.sourceKind] ?? 0) ||
+      a.ref.localeCompare(b.ref),
+  );
 }
 
 export function groupEntries(entries: CatalogEntry[], query: string): CatalogGroup[] {
   const groups = new Map<string, CatalogEntry[]>();
   for (const entry of entries) {
-    const list = groups.get(entry.normalizedTitle);
+    const key = groupKey(entry.normalizedTitle);
+    const list = groups.get(key);
     if (list) list.push(entry);
-    else groups.set(entry.normalizedTitle, [entry]);
+    else groups.set(key, [entry]);
   }
 
-  const normalizedQuery = query.toLowerCase().trim();
-  return [...groups.entries()]
-    .map(([normalizedTitle, list]) => ({
-      normalizedTitle,
-      title: bestTitle(list),
-      entries: list,
-    }))
-    .sort((a, b) => {
-      // Exact matches first, then more sources, then shorter titles.
-      const aExact = a.normalizedTitle === normalizedQuery ? 0 : 1;
-      const bExact = b.normalizedTitle === normalizedQuery ? 0 : 1;
-      if (aExact !== bExact) return aExact - bExact;
-      if (a.entries.length !== b.entries.length) return b.entries.length - a.entries.length;
-      return a.title.length - b.title.length;
+  const normalizedQuery = normalizeTitle(query);
+
+  const scored = [...groups.values()]
+    .map((list) => {
+      const title = bestTitle(list);
+      return {
+        normalizedTitle: normalizeTitle(title),
+        title,
+        entries: orderEntries(list),
+      };
     })
-    .slice(0, MAX_GROUPS);
+    .map((group) => ({
+      group,
+      score: scoreGroup(group, normalizedQuery),
+      base: baseScore(group.normalizedTitle, normalizedQuery),
+    }));
+
+  // Once something genuinely matches, fuzzy near-misses are noise, not results.
+  // They are kept when nothing matched, so a typo still returns *something*.
+  const matched = scored.some((row) => row.base > NO_MATCH);
+  const kept = matched ? scored.filter((row) => row.base > NO_MATCH) : scored;
+
+  return kept
+    .sort((a, b) => b.score - a.score || a.group.title.localeCompare(b.group.title))
+    .slice(0, MAX_GROUPS)
+    .map(({ group }) => group);
 }
 
 export async function searchCatalog(
   cache: Cache,
   query: string,
-  sources: SourceKind[] = SEARCHABLE_SOURCES,
+  sources: SourceKind[] = DEFAULT_SEARCH_SOURCES,
 ): Promise<SearchResponse> {
   const warnings: string[] = [];
+  const challenged: SourceKind[] = [];
   const enabled = sources.filter((source) => RUNNERS[source] !== undefined);
 
   const results = await Promise.all(
@@ -99,6 +261,7 @@ export async function searchCatalog(
         return await withTimeout(source, config.searchTimeoutMs, RUNNERS[source]!(cache, query));
       } catch (error) {
         warnings.push(`${source}: ${(error as Error).message}`);
+        if ((error as { upstreamChallenge?: boolean }).upstreamChallenge) challenged.push(source);
         return [] as CatalogEntry[];
       }
     }),
@@ -109,5 +272,6 @@ export async function searchCatalog(
     groups: groupEntries(results.flat(), query),
     warnings,
     sources: enabled,
+    challenged,
   };
 }

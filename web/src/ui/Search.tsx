@@ -1,20 +1,46 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 
-import { api, isOfflineError, type CatalogEntry, type CatalogGroup } from '../api/client';
+import {
+  api,
+  isOfflineError,
+  type CatalogEntry,
+  strategyWikiPageUrl,
+  type CatalogGroup,
+  type SourceInfo,
+} from '../api/client';
 import type { SourceKind } from '../parser/ast';
 import { downloadEntry } from '../storage/download';
 import { getSetting } from '../storage/db';
-import { ErrorNote, SourceBadge, Spinner, Warnings } from './bits';
+import { ErrorNote, SOURCE_LABELS, SourceBadge, Spinner, Warnings } from './bits';
 import { useDebounced, useLatest, useLibrary, useOfflineRefs, useOnline } from './hooks';
 
-const SOURCES: SourceKind[] = ['uhs', 'ifarchive', 'strategywiki', 'ifdb'];
+/**
+ * Chips to show before `/api/catalog/sources` answers — and if it never does.
+ *
+ * The server is the authority on which sources are on by default (SEARCH_SOURCES),
+ * but the first keystroke should not have to wait for a round-trip, so this
+ * mirrors the shipped default.
+ */
+const FALLBACK_SOURCES: SourceInfo[] = [
+  { kind: 'uhs', enabledByDefault: true },
+  { kind: 'ifarchive', enabledByDefault: true },
+  { kind: 'ifdb', enabledByDefault: true },
+  { kind: 'strategywiki', enabledByDefault: false },
+];
+
 const MIN_QUERY = 3;
 const DEBOUNCE_MS = 400;
 
+const defaultsOf = (sources: SourceInfo[]): SourceKind[] =>
+  sources.filter((source) => source.enabledByDefault).map((source) => source.kind);
+
 export function Search(): JSX.Element {
   const [query, setQuery] = useState('');
-  const [selected, setSelected] = useState<SourceKind[]>(SOURCES);
+  const [sources, setSources] = useState<SourceInfo[]>(FALLBACK_SOURCES);
+  const [selected, setSelected] = useState<SourceKind[]>(() => defaultsOf(FALLBACK_SOURCES));
+  /** Once the user has touched a chip, the server's defaults stop overriding it. */
+  const touchedChips = useRef(false);
   const [groups, setGroups] = useState<CatalogGroup[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -26,9 +52,35 @@ export function Search(): JSX.Element {
   const { documents, reload } = useLibrary();
   const offlineRefs = useOfflineRefs(documents);
 
+  // Only surface a caveat for a source the user has switched *on* against the
+  // server's advice — otherwise every search carries a paragraph of small print.
+  const selectedNotes = sources
+    .filter((source) => selected.includes(source.kind) && !source.enabledByDefault && source.note)
+    .map((source) => `${SOURCE_LABELS[source.kind]}: ${source.note!}`);
+
+  // Ask the server which sources it has and which it considers default. A
+  // failure here is not worth surfacing: the fallback list is already correct
+  // for a stock deployment, and a real outage will show up on the search itself.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .sources()
+      .then((response) => {
+        if (cancelled || response.sources.length === 0) return;
+        setSources(response.sources);
+        if (!touchedChips.current) setSelected(defaultsOf(response.sources));
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   useEffect(() => {
     const trimmed = debounced.trim();
-    if (trimmed.length < MIN_QUERY) {
+    // An empty selection must mean "nothing", not "fall back to the defaults" —
+    // which is what sending no `sources` parameter would do.
+    if (trimmed.length < MIN_QUERY || selected.length === 0) {
       setGroups([]);
       setWarnings([]);
       setError(null);
@@ -41,6 +93,22 @@ export function Search(): JSX.Element {
         const response = await api.search(trimmed, selected, signal);
         setGroups(response.groups);
         setWarnings(response.warnings);
+
+        // A source that bot-challenged the server may still answer the browser.
+        // Retry those here and fold the results in, dropping the warning if it
+        // works — the user does not need to hear about a failure we recovered.
+        if (response.challenged?.includes('strategywiki')) {
+          try {
+            const direct = await api.searchStrategyWikiDirect(trimmed, signal);
+            if (direct.length > 0) {
+              setGroups((current) => mergeEntries(current, direct));
+              setWarnings((current) => current.filter((w) => !w.startsWith('strategywiki:')));
+            }
+          } catch {
+            // Challenged here too. The warning the server already produced
+            // explains it, and each row still links out to the page.
+          }
+        }
       } catch (caught) {
         if ((caught as Error).name === 'AbortError') return;
         setGroups([]);
@@ -68,27 +136,35 @@ export function Search(): JSX.Element {
       />
 
       <div className="chips" role="group" aria-label="Filter by source">
-        {SOURCES.map((source) => {
-          const active = selected.includes(source);
+        {sources.map((source) => {
+          const active = selected.includes(source.kind);
           return (
             <button
-              key={source}
+              key={source.kind}
               type="button"
               className={active ? 'chip chip-on' : 'chip'}
               aria-pressed={active}
-              onClick={() =>
+              {...(source.note ? { title: source.note } : {})}
+              onClick={() => {
+                touchedChips.current = true;
                 setSelected((current) =>
-                  current.includes(source)
-                    ? current.filter((s) => s !== source)
-                    : [...current, source],
-                )
-              }
+                  current.includes(source.kind)
+                    ? current.filter((s) => s !== source.kind)
+                    : [...current, source.kind],
+                );
+              }}
             >
-              <SourceBadge kind={source} />
+              <SourceBadge kind={source.kind} />
             </button>
           );
         })}
       </div>
+
+      {selectedNotes.map((note) => (
+        <p key={note} className="muted">
+          {note}
+        </p>
+      ))}
 
       {!online && (
         <p className="muted">
@@ -98,6 +174,7 @@ export function Search(): JSX.Element {
       {query.trim().length > 0 && query.trim().length < MIN_QUERY && (
         <p className="muted">Type at least {MIN_QUERY} characters.</p>
       )}
+      {selected.length === 0 && <p className="muted">Pick at least one source.</p>}
       {searching && <Spinner label="Searching…" />}
       {error && <ErrorNote error={error} />}
       <Warnings warnings={warnings} />
@@ -120,11 +197,46 @@ export function Search(): JSX.Element {
         ))}
       </ul>
 
-      {!searching && !error && debounced.trim().length >= MIN_QUERY && groups.length === 0 && (
-        <p className="muted">Nothing found for “{debounced.trim()}”.</p>
-      )}
+      {!searching &&
+        !error &&
+        selected.length > 0 &&
+        debounced.trim().length >= MIN_QUERY &&
+        groups.length === 0 && (
+          <p className="muted">Nothing found for “{debounced.trim()}”.</p>
+        )}
     </>
   );
+}
+
+/**
+ * Fold client-side results into the server's grouping.
+ *
+ * The server did the ranking, so its order is preserved: an entry whose title
+ * already has a group joins it, and anything new is appended rather than
+ * interleaved — a source we had to rescue by hand has not earned a top slot.
+ */
+function mergeEntries(groups: CatalogGroup[], extra: CatalogEntry[]): CatalogGroup[] {
+  const merged = groups.map((group) => ({ ...group, entries: [...group.entries] }));
+  const byTitle = new Map(merged.map((group) => [group.normalizedTitle, group]));
+
+  for (const entry of extra) {
+    const existing = byTitle.get(entry.normalizedTitle);
+    if (existing) {
+      const already = existing.entries.some(
+        (e) => e.sourceKind === entry.sourceKind && e.ref === entry.ref,
+      );
+      if (!already) existing.entries.push(entry);
+      continue;
+    }
+    const group: CatalogGroup = {
+      normalizedTitle: entry.normalizedTitle,
+      title: entry.title,
+      entries: [entry],
+    };
+    byTitle.set(group.normalizedTitle, group);
+    merged.push(group);
+  }
+  return merged;
 }
 
 /**
@@ -148,6 +260,19 @@ function describe(entry: CatalogEntry): string {
   if (entry.meta?.date) parts.push(entry.meta.date);
   if (entry.meta?.size) parts.push(`${Math.max(1, Math.round(entry.meta.size / 1024))} KB`);
   return parts.join(' · ');
+}
+
+/**
+ * The page this entry describes, on the source's own site.
+ *
+ * IFDB has no hint file to download — it is an index of interactive fiction, so
+ * the useful action is "go and look", not a button that cannot work. Same for a
+ * StrategyWiki page the proxy could not reach.
+ */
+function externalUrl(entry: CatalogEntry): string | null {
+  if (entry.sourceKind === 'ifdb') return `https://ifdb.org/viewgame?id=${entry.ref}`;
+  if (entry.sourceKind === 'strategywiki') return strategyWikiPageUrl(entry.ref);
+  return null;
 }
 
 /** The URL form a stored document records, so downloads can be matched. */
@@ -177,6 +302,7 @@ function ResultRow({
   );
   const [message, setMessage] = useState<string | null>(null);
   const navigate = useNavigate();
+  const external = externalUrl(entry);
 
   const download = async (): Promise<void> => {
     setState('working');
@@ -203,20 +329,32 @@ function ResultRow({
           {downloaded && <span className="pill pill-offline">Available offline</span>}
         </span>
         {message && <span className={state === 'error' ? 'error' : 'muted'}>{message}</span>}
+        {state === 'error' && external && (
+          <a className="link-out" href={external} target="_blank" rel="noreferrer noopener">
+            Open on {SOURCE_LABELS[entry.sourceKind]} ↗
+          </a>
+        )}
       </div>
-      <button
-        type="button"
-        className="row-action"
-        disabled={state === 'working' || entry.sourceKind === 'ifdb'}
-        title={
-          entry.sourceKind === 'ifdb'
-            ? 'IFDB is a catalogue only — download this game from UHS or the IF Archive'
-            : undefined
-        }
-        onClick={() => void download()}
-      >
-        {state === 'working' ? 'Downloading…' : downloaded ? 'Re-download' : 'Download'}
-      </button>
+      {entry.sourceKind === 'ifdb' ? (
+        <a
+          className="row-action"
+          href={external ?? 'https://ifdb.org/'}
+          target="_blank"
+          rel="noreferrer noopener"
+          title="IFDB is a catalogue of interactive fiction — there is no hint file to download. Its entry usually links to the walkthroughs that are on the IF Archive."
+        >
+          View ↗
+        </a>
+      ) : (
+        <button
+          type="button"
+          className="row-action"
+          disabled={state === 'working'}
+          onClick={() => void download()}
+        >
+          {state === 'working' ? 'Downloading…' : downloaded ? 'Re-download' : 'Download'}
+        </button>
+      )}
     </li>
   );
 }
