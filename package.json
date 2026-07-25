@@ -3,7 +3,7 @@
   "private": true,
   "version": "1.0.0",
   "description": "Personal-use, spoiler-safe game hint reader (UHS + open hint sources)",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22"

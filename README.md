@@ -246,6 +246,17 @@ This is a personal-use project and behaves like one:
 - **Be gentle.** uhs-hints.com has been dormant since ~2015: the catalogue is
   one request a day and files are cached forever.
 
+### Licence
+
+The **code** is MIT — see [LICENSE](LICENSE).
+
+That covers this repository and nothing else. It grants no rights to the hint
+content the app reads: UHS files remain the work of the Universal Hint System
+and its contributors and are personal-use-only, IF Archive material belongs to
+its individual authors, and wiki content keeps whatever licence the wiki states.
+No hint content is in this repository, and none of it becomes MIT-licensed by
+being read with this software.
+
 ### Prior art
 
 - **freeuhs** (Aaron Black, Unlicense) — the reference this parser was ported
