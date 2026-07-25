@@ -14,7 +14,9 @@ There are two ways to run it, and the first is the one you want.
 
 > I do not have a Synology to test on, so treat the DSM click-paths as
 > written-from-the-docs rather than verified. The container side is identical to
-> the local stack, which is fully tested.
+> the local stack and is fully tested — including, specifically, the bind-mount
+> ownership and the port mapping below, both reproduced against the published
+> images.
 
 ---
 
@@ -32,15 +34,29 @@ Create the project folder — over SSH:
 ```bash
 ssh you@your-nas.local
 sudo mkdir -p /volume1/docker/omni-uhs/cache
+
+# REQUIRED. The proxy container runs as the distroless `nonroot` user, uid
+# 65532, and a bind mount keeps the host's ownership — which is root. Without
+# this the proxy crashes on startup with EACCES and restarts forever.
+sudo chown -R 65532:65532 /volume1/docker/omni-uhs/cache
+
 cd /volume1/docker/omni-uhs
 ```
 
 …or in File Station: open `docker`, create `omni-uhs`, and a `cache` folder
-inside it.
+inside it — but you still need the `chown` over SSH, because File Station
+cannot set that uid.
+
+> Why the extra step here and nowhere else: the image ships `/data/cache`
+> already owned by uid 65532, so a **named volume** picks that up on its own.
+> A **bind mount** replaces the directory with the host's, ownership included,
+> which is the price of having Hyper Backup and File Station able to see it.
 
 > DSM reserves ports 80, 443, 5000 and 5001 for itself. Omni UHS uses **8081**
-> below; if something else on your NAS already has it, change both numbers in
-> the port mapping.
+> below; if something else on your NAS already has it, change only the
+> **left-hand** number — `"9000:80"`, say. The right-hand `80` is the port Caddy
+> listens on *inside* the container and must stay 80. Mapping `8081:8081` gives
+> a connection reset, because nothing is listening on 8081 in there.
 
 ---
 
@@ -228,11 +244,17 @@ models (under 2 GB) may need swap enabled to get through the Vite build.
 **Port 8081 is already taken.** `sudo netstat -tlnp | grep 8081`, then pick
 another and change the mapping.
 
-**"permission denied" on the cache folder.** The proxy runs as a non-root user
-inside the container. Give the bind mount broad access:
-`sudo chmod 777 /volume1/docker/omni-uhs/cache` — it holds nothing sensitive,
-only downloaded public files. (The named-volume setups avoid this entirely; it
-is the price of a browsable bind mount.)
+**The proxy container will not start / restarts in a loop.** Almost always the
+cache directory's ownership. `sudo docker logs omni-uhs-proxy` will say so in
+as many words, and the fix is the `chown` from §0:
+
+```bash
+sudo chown -R 65532:65532 /volume1/docker/omni-uhs/cache
+sudo docker restart omni-uhs-proxy
+```
+
+Prefer `chown` over `chmod 777`: it grants exactly the one account that needs
+it, and survives DSM's periodic permission tidying.
 
 **Container Manager shows the project as "unhealthy".** Both images have
 healthchecks; `sudo docker compose logs proxy` will say why. The usual cause is

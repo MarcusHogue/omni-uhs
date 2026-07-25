@@ -6,13 +6,13 @@
  * told to.
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { Cache } from '../src/cache/index.js';
+import { Cache, describeCacheDirFailure } from '../src/cache/index.js';
 import { FakeUpstream } from './helpers/upstream.js';
 
 let upstream: FakeUpstream;
@@ -213,5 +213,117 @@ describe('Retry-After', () => {
       cache.fetch({ url: upstream.url('/closed'), ttl: 60, allowlist: allow() }),
     ).rejects.toThrow(/503/);
     expect(upstream.hitsFor('/closed')).toBe(1);
+  });
+});
+
+describe('cache directory permissions', () => {
+  // Root ignores directory permissions, so the end-to-end version of this only
+  // means anything as a normal user. The message mapping itself is tested
+  // directly below and runs everywhere.
+  const asRoot = typeof process.getuid === 'function' && process.getuid() === 0;
+
+  it('maps EACCES to an instruction, not a stack trace', () => {
+    const error = Object.assign(new Error('EACCES: permission denied, mkdir'), {
+      code: 'EACCES',
+    });
+    const described = describeCacheDirFailure('/data/cache', error);
+    expect(described.message).toContain('Cannot write to CACHE_DIR (/data/cache)');
+    expect(described.message).toContain('chown -R 65532:65532');
+    expect(described.message).toContain('named Docker volume');
+  });
+
+  it('maps the SQLite failure too, which is what an existing bind mount gives', () => {
+    // mkdir -p succeeds on a directory that already exists, so an unwritable
+    // *pre-created* cache gets all the way to opening the database before
+    // anything complains — and better-sqlite3 says SQLITE_CANTOPEN, not EACCES.
+    const error = Object.assign(new Error('unable to open database file'), {
+      code: 'SQLITE_CANTOPEN',
+    });
+    const described = describeCacheDirFailure('/data/cache', error);
+    expect(described.message).toContain('Cannot write to CACHE_DIR (/data/cache)');
+    expect(described.message).toContain('unable to open database file');
+    expect(described.message).toContain('chown -R 65532:65532');
+  });
+
+  it('passes other errors through untouched', () => {
+    const error = Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
+    expect(describeCacheDirFailure('/data/cache', error)).toBe(error);
+  });
+
+  it.skipIf(asRoot)('surfaces that message when the directory really is unwritable', () => {
+    const readOnly = mkdtempSync(join(tmpdir(), 'hint-ro-'));
+    chmodSync(readOnly, 0o500);
+    try {
+      expect(() => new Cache(join(readOnly, 'cache'))).toThrow(/Cannot write to CACHE_DIR/);
+    } finally {
+      chmodSync(readOnly, 0o700);
+      rmSync(readOnly, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(asRoot)('…and when the directory already exists but cannot be written', () => {
+    const existing = mkdtempSync(join(tmpdir(), 'hint-ro-existing-'));
+    mkdirSync(join(existing, 'blobs'), { recursive: true });
+    chmodSync(existing, 0o500);
+    try {
+      expect(() => new Cache(existing)).toThrow(/Cannot write to CACHE_DIR/);
+    } finally {
+      chmodSync(existing, 0o700);
+      rmSync(existing, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('bot challenges', () => {
+  it('explains a Cloudflare challenge instead of reporting a bare 403', async () => {
+    upstream.on('/walled', () => ({
+      status: 403,
+      headers: { 'cf-mitigated': 'challenge' },
+      body: 'Just a moment...',
+    }));
+
+    await expect(
+      cache.fetch({ url: upstream.url('/walled'), ttl: 60, allowlist: allow() }),
+    ).rejects.toThrow(/Cloudflare managed challenge/);
+  });
+
+  it('flags it so the client can decide to try the site itself', async () => {
+    upstream.on('/walled', () => ({
+      status: 403,
+      headers: { 'cf-mitigated': 'challenge' },
+      body: 'Just a moment...',
+    }));
+
+    const error = await cache
+      .fetch({ url: upstream.url('/walled'), ttl: 60, allowlist: allow() })
+      .catch((caught: Error & { upstreamChallenge?: boolean }) => caught);
+    expect((error as { upstreamChallenge?: boolean }).upstreamChallenge).toBe(true);
+  });
+
+  it('leaves an ordinary 403 alone — not every refusal is a challenge', async () => {
+    upstream.on('/forbidden', () => ({ status: 403, body: 'no' }));
+
+    const error = await cache
+      .fetch({ url: upstream.url('/forbidden'), ttl: 60, allowlist: allow() })
+      .catch((caught: Error & { upstreamChallenge?: boolean }) => caught);
+    expect((error as Error).message).toBe('Upstream responded 403');
+    expect((error as { upstreamChallenge?: boolean }).upstreamChallenge).toBeUndefined();
+  });
+
+  it('still prefers a stale copy over an error when it has one', async () => {
+    let challenge = false;
+    upstream.on('/flaky', () =>
+      challenge
+        ? { status: 403, headers: { 'cf-mitigated': 'challenge' }, body: 'Just a moment...' }
+        : { body: 'the good stuff' },
+    );
+
+    const fresh = await cache.fetch({ url: upstream.url('/flaky'), ttl: 0, allowlist: allow() });
+    expect(await cache.readText(fresh)).toBe('the good stuff');
+
+    challenge = true;
+    const stale = await cache.fetch({ url: upstream.url('/flaky'), ttl: 0, allowlist: allow() });
+    expect(stale.fromCache).toBe(true);
+    expect(await cache.readText(stale)).toBe('the good stuff');
   });
 });

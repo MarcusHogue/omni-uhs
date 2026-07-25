@@ -62,6 +62,7 @@ services:
       CACHE_DIR: /data/cache
       UPSTREAM_ALLOWLIST: ${UPSTREAM_ALLOWLIST:-uhs-hints.com,www.uhs-hints.com,strategywiki.org,www.strategywiki.org,ifdb.org,ifarchive.org,www.ifarchive.org}
       WIKI_ALLOWLIST: ${WIKI_ALLOWLIST:-}
+      SEARCH_SOURCES: ${SEARCH_SOURCES:-uhs,ifarchive,ifdb}
       # Be honest about who is calling: put a real contact address here.
       USER_AGENT: ${USER_AGENT:-OmniUHS/1.0 (+personal use; set USER_AGENT with a contact address)}
     volumes:
