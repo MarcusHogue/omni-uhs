@@ -1,0 +1,73 @@
+{
+  "document": {
+    "id": "uhs-b426669075aa8ca3",
+    "game": {
+      "title": "The Illustrated Cavern"
+    },
+    "source": {
+      "kind": "uhs",
+      "url": "fixture://image96a.uhs",
+      "license": "proprietary-personal-use",
+      "personalUseOnly": true
+    },
+    "fetchedAt": "2026-01-01T00:00:00.000Z",
+    "root": {
+      "id": "uhs:1",
+      "type": "subject",
+      "label": "The Illustrated Cavern",
+      "children": [
+        {
+          "id": "uhs:3",
+          "type": "image",
+          "label": "Map of the cavern",
+          "mime": "image/png",
+          "hotspots": [
+            {
+              "rect": [
+                10,
+                20,
+                90,
+                60
+              ],
+              "target": {
+                "id": "uhs:7",
+                "type": "link",
+                "label": "The north passage",
+                "targetId": "uhs:10"
+              }
+            }
+          ],
+          "data": "base64:iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg=="
+        },
+        {
+          "id": "uhs:10",
+          "type": "hints",
+          "label": "North passage",
+          "hints": [
+            {
+              "id": "uhs:12",
+              "type": "hint",
+              "content": [
+                {
+                  "kind": "run",
+                  "text": "It is blocked by rubble."
+                }
+              ]
+            },
+            {
+              "id": "uhs:14",
+              "type": "hint",
+              "content": [
+                {
+                  "kind": "run",
+                  "text": "Use the pickaxe from the shed."
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  },
+  "warnings": []
+}

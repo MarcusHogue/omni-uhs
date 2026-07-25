@@ -1,0 +1,108 @@
+# Omni UHS — tailnet deployment.
+#
+# Three containers, one network namespace. The Tailscale sidecar owns the
+# netns; `web` and `proxy` join it, which means they talk over 127.0.0.1 and
+# nothing is published to the host or the LAN. The only way in is the tailnet.
+#
+# Why Tailscale rather than a port forward: *.ts.net names get a real Let's
+# Encrypt certificate, which iOS trusts, which is what makes PWA installation
+# and service workers work at all. Same endpoint will serve the native iOS
+# client later.
+#
+# Prerequisites in the tailnet admin console: MagicDNS enabled and HTTPS
+# certificates enabled. Put TS_AUTHKEY in .env (see .env.example).
+
+services:
+  ts-sidecar:
+    image: tailscale/tailscale:stable
+    container_name: omni-uhs-ts
+    hostname: omni-uhs
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY:?set TS_AUTHKEY in .env}
+      TS_STATE_DIR: /var/lib/tailscale
+      # Mount the *directory*, not the file: the daemon watches it for changes.
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_USERSPACE: "false"
+      TS_EXTRA_ARGS: --accept-dns=false
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - ./ts-config:/config:ro
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+      - sys_module
+    healthcheck:
+      test: ["CMD", "tailscale", "status"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  proxy:
+    build:
+      context: .
+      dockerfile: proxy/Dockerfile
+    image: ghcr.io/marcushogue/omni-uhs-proxy:latest
+    container_name: omni-uhs-proxy
+    restart: unless-stopped
+    # Shares the sidecar's netns: no ports, no networks, reachable on loopback.
+    network_mode: service:ts-sidecar
+    depends_on:
+      ts-sidecar:
+        condition: service_started
+    environment:
+      PORT: 8080
+      HOST: 127.0.0.1
+      CACHE_DIR: /data/cache
+      UPSTREAM_ALLOWLIST: ${UPSTREAM_ALLOWLIST:-uhs-hints.com,www.uhs-hints.com,strategywiki.org,www.strategywiki.org,ifdb.org,ifarchive.org,www.ifarchive.org}
+      WIKI_ALLOWLIST: ${WIKI_ALLOWLIST:-}
+      # Be honest about who is calling: put a real contact address here.
+      USER_AGENT: ${USER_AGENT:-OmniUHS/1.0 (+personal use; set USER_AGENT with a contact address)}
+    volumes:
+      - cache-data:/data/cache
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  web:
+    build:
+      context: .
+      dockerfile: web/Dockerfile
+    image: ghcr.io/marcushogue/omni-uhs-web:latest
+    container_name: omni-uhs-web
+    restart: unless-stopped
+    network_mode: service:ts-sidecar
+    depends_on:
+      ts-sidecar:
+        condition: service_started
+      proxy:
+        condition: service_started
+    deploy:
+      resources:
+        limits:
+          memory: 128M
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+
+volumes:
+  # The upstream cache: hint files and catalogues. Rebuildable, but re-fetching
+  # is rude to a dormant site, so it is worth backing up.
+  cache-data:
+  # Tailscale node identity and certificates. Losing this means re-authing and
+  # re-issuing the certificate, so persist it.
+  ts-state:
