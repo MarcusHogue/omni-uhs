@@ -33,6 +33,13 @@ export interface UpdateState {
   /** The proxy is on a different build than this bundle. */
   mismatch: boolean;
   proxyVersion: string | null;
+  /**
+   * Whether the proxy has actually answered a version request. Without this,
+   * "not checked yet" and "checked and matching" are indistinguishable, and the
+   * UI would report a successful comparison that never happened — offline, that
+   * would be permanent.
+   */
+  checked: boolean;
   reason: UpdateReason | null;
 }
 
@@ -42,6 +49,7 @@ const state: UpdateState = {
   waiting: false,
   mismatch: false,
   proxyVersion: null,
+  checked: false,
   reason: null,
 };
 
@@ -64,17 +72,25 @@ export function subscribe(listener: Listener): () => void {
 
 export const getUpdateState = (): UpdateState => ({ ...state });
 
-/**
- * Apply a waiting update.
- *
- * `updateServiceWorker(true)` activates the waiting worker and reloads. Set by
- * `startUpdateWatch`; a no-op before registration or when nothing is waiting.
- */
+/** Set by `startUpdateWatch`; activates the waiting worker. */
 let applyUpdate: (() => Promise<void>) | null = null;
 
+/**
+ * Apply an update.
+ *
+ * Only route through the service worker when one is actually waiting.
+ * `updateServiceWorker` ignores its `reloadPage` argument entirely — it just
+ * posts SKIP_WAITING, and the reload comes from a `controlling` listener the
+ * plugin only attaches once a worker has reached `waiting`. With nothing
+ * waiting it is a no-op, so a mismatch-only state has to reload the page
+ * itself or the button does nothing at all.
+ */
 export async function applyWaitingUpdate(): Promise<void> {
-  if (applyUpdate) await applyUpdate();
-  else location.reload();
+  if (state.waiting && applyUpdate) {
+    await applyUpdate();
+    return;
+  }
+  location.reload();
 }
 
 /** Ask the browser to re-check for a new service worker, on demand. */
@@ -104,6 +120,7 @@ export async function refreshProxyVersion(): Promise<void> {
     const body = (await response.json()) as { version?: string };
     const proxyVersion = typeof body.version === 'string' ? body.version : null;
     state.proxyVersion = proxyVersion;
+    state.checked = proxyVersion !== null;
     state.mismatch =
       proxyVersion !== null &&
       isReleaseBuild(proxyVersion) &&
@@ -159,24 +176,47 @@ export function startUpdateWatch(): void {
 const DISMISS_KEY = 'omni-uhs:update-dismissed';
 
 /**
- * What was dismissed, so the banner does not nag — but only for *this* update.
- * Keyed by the version being offered, so the next build asks again.
+ * The two reasons are dismissed differently, because only one of them has
+ * anything stable to key on.
+ *
+ * A **mismatch** names a specific proxy build, so the dismissal persists
+ * against that version and the next differing build asks again.
+ *
+ * A **waiting service worker** does not: the page cannot see the version of the
+ * build sitting in `waiting` — that number lives inside the new bundle, not
+ * this one — and the proxy's version is no substitute, since the two images
+ * publish independently and the proxy may not have moved at all. Keying on it
+ * would silently swallow the notice for a later web build. So this one is
+ * dismissed for the session only: gone until the next launch, where it is one
+ * tap away and worth mentioning once more.
  */
 export const dismissalKey = (state: UpdateState): string =>
-  `${state.reason ?? 'none'}:${state.proxyVersion ?? 'unknown'}`;
+  state.reason === 'version-mismatch'
+    ? `version-mismatch:${state.proxyVersion ?? 'unknown'}`
+    : `${state.reason ?? 'none'}:session`;
+
+/** Session-scoped dismissals, for the states with no durable identity. */
+const dismissedThisSession = new Set<string>();
 
 export function isDismissed(state: UpdateState): boolean {
+  if (state.reason === null) return false;
+  if (state.reason !== 'version-mismatch') {
+    return dismissedThisSession.has(dismissalKey(state));
+  }
   try {
     return localStorage.getItem(DISMISS_KEY) === dismissalKey(state);
   } catch {
-    return false;
+    return dismissedThisSession.has(dismissalKey(state));
   }
 }
 
 export function dismiss(state: UpdateState): void {
+  if (state.reason === null) return;
+  dismissedThisSession.add(dismissalKey(state));
+  if (state.reason !== 'version-mismatch') return;
   try {
     localStorage.setItem(DISMISS_KEY, dismissalKey(state));
   } catch {
-    /* private mode: it will ask again next launch, which is acceptable */
+    /* private mode: the session-scoped copy above still applies */
   }
 }

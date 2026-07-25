@@ -13,7 +13,7 @@ import {
   type ExportScope,
 } from '../storage/exchange';
 import { formatBytes } from './bits';
-import { useAppUpdate, useLibrary } from './hooks';
+import { useAppUpdate, useLibrary, useOnline } from './hooks';
 import { isReleaseBuild, WEB_VERSION } from './update';
 import {
   applyTextScale,
@@ -28,6 +28,7 @@ import {
 export function Settings(): JSX.Element {
   const { documents, reload } = useLibrary();
   const update = useAppUpdate();
+  const online = useOnline();
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [estimate, setEstimate] = useState<{ usage: number; quota: number } | null>(null);
   const [decodeIncentive, setDecodeIncentive] = useState(false);
@@ -324,7 +325,9 @@ export function Settings(): JSX.Element {
               <dt>This app</dt>
               <dd className="mono">{WEB_VERSION}</dd>
               <dt>Proxy</dt>
-              <dd className="mono">{update.state.proxyVersion ?? '—'}</dd>
+              <dd className="mono">
+                {update.state.proxyVersion ?? (online ? 'not reachable' : 'offline')}
+              </dd>
             </dl>
             {update.state.reason === 'service-worker' && (
               <div className="warnings-box">
@@ -351,9 +354,16 @@ export function Settings(): JSX.Element {
                 </button>
               </div>
             )}
-            {update.state.reason === null && (
-              <p className="muted">Up to date.</p>
-            )}
+            {update.state.reason === null &&
+              (update.state.checked ? (
+                <p className="muted">Up to date.</p>
+              ) : (
+                <p className="muted">
+                  {online
+                    ? 'The proxy has not answered a version check yet, so there is nothing to compare against.'
+                    : 'Offline — versions can only be compared with a connection.'}
+                </p>
+              ))}
             <div className="buttons">
               <button type="button" onClick={() => void update.check()}>
                 Check for updates

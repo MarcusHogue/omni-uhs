@@ -53,7 +53,7 @@ export function App(): JSX.Element {
           <span>
             {update.state.reason === 'service-worker'
               ? 'A new version is ready.'
-              : 'The server is running a newer version.'}
+              : 'The server is running a different version.'}
           </span>
           {update.state.reason === 'service-worker' ? (
             <button type="button" className="linkish update-action" onClick={update.apply}>
