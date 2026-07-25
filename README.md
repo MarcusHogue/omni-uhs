@@ -209,14 +209,18 @@ See [docs/SETUP.md](docs/SETUP.md) for the full runbook.
 
 - **Images:** `ghcr.io/marcushogue/omni-uhs-web` and
   `ghcr.io/marcushogue/omni-uhs-proxy`, tagged `latest` and by commit SHA.
-  Published on push to `main`, so they do not exist until this branch merges —
-  build from source with `--build` until then. The packages inherit this
-  repository's visibility, so pulling needs a `read:packages` login while it is
-  private.
+  Published on push to `main`. Both are public — no `docker login` needed.
 - **Updates:** on the host, `docker compose pull && docker compose up -d`.
 - **Backups:** weekly tar of the `cache-data` and `ts-state` volumes. Your
-  library lives in the browser — use Settings → Export for that.
-- **Health:** `/healthz` on both containers.
+  library lives in the browser — Settings → Export & import has a **full
+  backup** (every title, reveal progress and settings, behind a personal-use
+  confirmation) and a **shareable export** (only what carries no redistribution
+  restriction).
+- **Logs:** both containers log to stdout. The proxy emits newline-delimited
+  JSON tagged by component — `http`, `upstream`, `cache`, `catalog`, `search` —
+  so `docker logs … | jq 'select(.component=="upstream")'` shows exactly what
+  left the machine. `LOG_LEVEL=debug` adds cache hits and misses.
+- **Health:** `/healthz` on both containers, excluded from both access logs.
 
 ---
 
@@ -224,12 +228,17 @@ See [docs/SETUP.md](docs/SETUP.md) for the full runbook.
 
 This is a personal-use project and behaves like one:
 
-- **No redistribution.** No sharing, publishing or export of personal-use-only
-  content. Library export deliberately excludes it and tells you what it left
-  out.
+- **No redistribution.** There is no share, publish or upload path anywhere in
+  the app. The **shareable export** excludes personal-use-only content and
+  lists what it left out. The **full backup** does include it — a backup that
+  silently dropped most of your library would not be a backup — so it requires
+  an explicit personal-use confirmation and stamps the notice into the archive.
+  Moving your own files between your own devices is personal use; putting that
+  archive somewhere others can reach it is not.
 - **UHS files** are the work of the Universal Hint System (Jason Strautman) and
-  its contributors. They are marked `personalUseOnly` and never leave the
-  device. Distribution would require written permission first.
+  its contributors. They are marked `personalUseOnly`: excluded from a shareable
+  export, and leaving the device only in a backup you have confirmed is for your
+  own use. Distribution would require written permission first.
 - **Registration-gated hints** (`incentive` hunks) are not decoded by default.
   There is a Settings toggle with a note explaining what it is.
 - **CC-BY-SA content** carries its attribution and licence into the Library and

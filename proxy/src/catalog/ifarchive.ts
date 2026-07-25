@@ -7,6 +7,7 @@
  */
 
 import { config } from '../config.js';
+import { log, since } from '../log.js';
 import type { Cache } from '../cache/index.js';
 import { normalizeTitle } from './normalize.js';
 import { escapeLike } from './uhs.js';
@@ -92,11 +93,19 @@ export async function refreshIfArchiveCatalog(
 
   let entries: CatalogEntry[] = [];
   const warnings: string[] = [];
+  const started = performance.now();
+  // The master index is ~15 MB. Worth announcing: it is the one thing here that
+  // can make a first search feel broken rather than slow.
+  log.catalog.info({ source: 'ifarchive' }, 'refreshing the IF Archive master index');
   try {
     const result = await cache.fetch({ url: MASTER_INDEX, ttl: config.ttl.index });
     entries = parseMasterIndex(await cache.readText(result));
   } catch (error) {
     warnings.push(`ifarchive: master index failed (${(error as Error).message})`);
+    log.catalog.warn(
+      { source: 'ifarchive', kept: state?.entries ?? 0, err: (error as Error).message },
+      'IF Archive refresh failed; keeping the existing table',
+    );
     return { entries: state?.entries ?? 0, warnings };
   }
 
@@ -129,6 +138,10 @@ export async function refreshIfArchiveCatalog(
       .run('ifarchive', now, entries.length, 'master-index');
   })();
 
+  log.catalog.info(
+    { source: 'ifarchive', entries: entries.length, ms: since(started) },
+    `IF Archive index refreshed: ${entries.length} files`,
+  );
   return { entries: entries.length, warnings };
 }
 

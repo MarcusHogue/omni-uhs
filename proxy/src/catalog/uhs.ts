@@ -16,6 +16,7 @@
  */
 
 import { config } from '../config.js';
+import { log, since } from '../log.js';
 import type { Cache } from '../cache/index.js';
 import { normalizeTitle } from './normalize.js';
 import type { CatalogEntry } from './types.js';
@@ -119,6 +120,11 @@ export async function refreshUhsCatalog(
   const warnings: string[] = [];
   let entries: UhsCatalogEntry[] = [];
   let usedSource: RefreshResult['source'] = 'update.cgi';
+  const started = performance.now();
+  log.catalog.info(
+    { source: 'uhs', ageHours: Number.isFinite(age) ? Math.round(age / 3_600_000) : null },
+    'refreshing the UHS catalog',
+  );
 
   try {
     const result = await cache.fetch({
@@ -144,6 +150,10 @@ export async function refreshUhsCatalog(
 
   if (entries.length === 0) {
     // Keep whatever we already have rather than emptying the table.
+    log.catalog.warn(
+      { source: 'uhs', kept: state?.entries ?? 0, warnings },
+      'UHS catalog refresh produced nothing; keeping the existing table',
+    );
     return { entries: state?.entries ?? 0, source: usedSource, warnings };
   }
 
@@ -176,6 +186,10 @@ export async function refreshUhsCatalog(
       .run('uhs', now, entries.length, usedSource);
   })();
 
+  log.catalog.info(
+    { source: 'uhs', entries: entries.length, via: usedSource, ms: since(started) },
+    `UHS catalog refreshed: ${entries.length} titles via ${usedSource}`,
+  );
   return { entries: entries.length, source: usedSource, warnings };
 }
 

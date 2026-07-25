@@ -9,10 +9,16 @@ getCache();
 
 try {
   await app.listen({ port: config.port, host: config.host });
+  // Everything here is worth having at the top of `docker logs`: nine times out
+  // of ten a support question is answered by one of these values being wrong.
   app.log.info(
     {
+      port: config.port,
+      host: config.host,
       cacheDir: config.cacheDir,
       allowlist: config.upstreamAllowlist,
+      searchSources: config.searchSources,
+      logLevel: config.logLevel,
       userAgent: config.userAgent,
     },
     'omni-uhs proxy ready',

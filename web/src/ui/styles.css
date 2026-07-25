@@ -1062,7 +1062,23 @@ a.row-action:active {
 .toggle input {
   width: 20px;
   height: 20px;
+  flex: none;
   accent-color: var(--accent);
+}
+
+/* A consent checkbox whose label is a sentence, not two words. */
+.toggle-wrap {
+  align-items: flex-start;
+}
+
+.toggle-wrap input {
+  margin-top: 2px;
+}
+
+/* Sub-headings within a settings section (Full backup / Shareable / Import). */
+section h3 {
+  margin: 18px 0 4px;
+  font-size: 15px;
 }
 
 .theme-grid {

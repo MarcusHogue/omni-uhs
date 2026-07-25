@@ -17,6 +17,7 @@ import { pipeline } from 'node:stream/promises';
 import Database from 'better-sqlite3';
 
 import { config } from '../config.js';
+import { log } from '../log.js';
 import { SingleFlight } from '../upstream/limiter.js';
 import { describeUpstreamRejection, fetchUpstream, type UpstreamRequest } from '../upstream/fetch.js';
 
@@ -245,6 +246,9 @@ export class Cache {
 
     const cached = this.read(key);
     if (cached && this.isFresh(cached)) {
+      // Debug, not info: on a warm cache this is every single request, and it
+      // would drown out the lines that represent something actually happening.
+      log.cache.debug({ key, size: cached.size }, 'hit');
       return { ...cached, fromCache: true, revalidated: false };
     }
 
@@ -252,8 +256,10 @@ export class Cache {
       // Another caller may have populated the cache while we queued.
       const recheck = this.read(key);
       if (recheck && this.isFresh(recheck)) {
+        log.cache.debug({ key }, 'hit (coalesced)');
         return { ...recheck, fromCache: true, revalidated: false };
       }
+      log.cache.debug({ key, revalidating: Boolean(recheck) }, recheck ? 'stale' : 'miss');
 
       const headers: Record<string, string> = { ...request.headers };
       if (recheck?.etag) headers['if-none-match'] = recheck.etag;
@@ -264,6 +270,7 @@ export class Cache {
 
       if (response.status === 304 && recheck) {
         await response.body?.cancel();
+        log.cache.info({ key }, 'unchanged upstream, kept the cached copy');
         return { ...this.touch(recheck), fromCache: true, revalidated: true };
       }
 
@@ -276,6 +283,10 @@ export class Cache {
         if (recheck) {
           // Upstream is unhappy but we have something. Serving stale beats
           // failing: these files do not change.
+          log.cache.warn(
+            { key, status: response.status },
+            'upstream refused; serving the stale copy',
+          );
           return { ...recheck, fromCache: true, revalidated: true };
         }
         const error = new Error(
@@ -301,6 +312,7 @@ export class Cache {
         request.ttl,
         size,
       );
+      log.cache.info({ key, bytes: size, ttl: request.ttl }, 'stored');
       return { ...entry, fromCache: false, revalidated: false };
     });
   }
