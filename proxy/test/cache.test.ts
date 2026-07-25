@@ -6,7 +6,7 @@
  * told to.
  */
 
-import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
+import { chmodSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -232,6 +232,19 @@ describe('cache directory permissions', () => {
     expect(described.message).toContain('named Docker volume');
   });
 
+  it('maps the SQLite failure too, which is what an existing bind mount gives', () => {
+    // mkdir -p succeeds on a directory that already exists, so an unwritable
+    // *pre-created* cache gets all the way to opening the database before
+    // anything complains — and better-sqlite3 says SQLITE_CANTOPEN, not EACCES.
+    const error = Object.assign(new Error('unable to open database file'), {
+      code: 'SQLITE_CANTOPEN',
+    });
+    const described = describeCacheDirFailure('/data/cache', error);
+    expect(described.message).toContain('Cannot write to CACHE_DIR (/data/cache)');
+    expect(described.message).toContain('unable to open database file');
+    expect(described.message).toContain('chown -R 65532:65532');
+  });
+
   it('passes other errors through untouched', () => {
     const error = Object.assign(new Error('no space left on device'), { code: 'ENOSPC' });
     expect(describeCacheDirFailure('/data/cache', error)).toBe(error);
@@ -245,6 +258,18 @@ describe('cache directory permissions', () => {
     } finally {
       chmodSync(readOnly, 0o700);
       rmSync(readOnly, { recursive: true, force: true });
+    }
+  });
+
+  it.skipIf(asRoot)('…and when the directory already exists but cannot be written', () => {
+    const existing = mkdtempSync(join(tmpdir(), 'hint-ro-existing-'));
+    mkdirSync(join(existing, 'blobs'), { recursive: true });
+    chmodSync(existing, 0o500);
+    try {
+      expect(() => new Cache(existing)).toThrow(/Cannot write to CACHE_DIR/);
+    } finally {
+      chmodSync(existing, 0o700);
+      rmSync(existing, { recursive: true, force: true });
     }
   });
 });
