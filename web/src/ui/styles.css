@@ -337,11 +337,34 @@ button.danger {
   vertical-align: top;
 }
 
+.image-frame {
+  position: relative;
+  display: inline-block;
+  max-width: 100%;
+}
+
 .imagenode img {
+  display: block;
   max-width: 100%;
   height: auto;
   border-radius: var(--radius);
   background: #fff;
+}
+
+/* Hotspots are outlined rather than invisible: an unmarked tappable region on
+   a map is a guessing game. */
+.hotspot {
+  position: absolute;
+  min-height: 0;
+  padding: 0;
+  background: rgba(122, 162, 247, 0.15);
+  border: 1px solid var(--accent);
+  border-radius: 3px;
+}
+
+.hotspot:hover,
+.hotspot:focus-visible {
+  background: rgba(122, 162, 247, 0.35);
 }
 
 .find-results {

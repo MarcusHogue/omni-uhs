@@ -316,6 +316,7 @@ function ImageView({
   onNavigate: (id: string) => void;
 }): JSX.Element {
   const [url, setUrl] = useState<string | null>(null);
+  const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
 
   useEffect(() => {
     // A blob URL keeps the bytes out of the DOM as base64 and is revoked on
@@ -323,18 +324,65 @@ function ImageView({
     const blob = new Blob([node.data as BlobPart], { type: node.mime });
     const objectUrl = URL.createObjectURL(blob);
     setUrl(objectUrl);
+    setNatural(null);
     return () => URL.revokeObjectURL(objectUrl);
   }, [node]);
+
+  const hotspots = node.hotspots ?? [];
 
   return (
     <div className="imagenode">
       <h2>{node.label}</h2>
-      {url && <img src={url} alt={node.label} />}
-      {node.hotspots && node.hotspots.length > 0 && (
+
+      <div className="image-frame">
+        {url && (
+          <img
+            src={url}
+            alt={node.label}
+            onLoad={(event) =>
+              setNatural({
+                width: event.currentTarget.naturalWidth,
+                height: event.currentTarget.naturalHeight,
+              })
+            }
+          />
+        )}
+        {/*
+          Hotspot rectangles are in the image's own pixel space, so they are
+          converted to percentages once the natural size is known. That keeps
+          them aligned however the image is scaled to the phone's width.
+        */}
+        {natural &&
+          natural.width > 0 &&
+          hotspots.map((hotspot, i) => {
+            const [x1, y1, x2, y2] = hotspot.rect;
+            const style = {
+              left: `${(Math.min(x1, x2) / natural.width) * 100}%`,
+              top: `${(Math.min(y1, y2) / natural.height) * 100}%`,
+              width: `${(Math.abs(x2 - x1) / natural.width) * 100}%`,
+              height: `${(Math.abs(y2 - y1) / natural.height) * 100}%`,
+            };
+            return (
+              <button
+                key={i}
+                type="button"
+                className="hotspot"
+                style={style}
+                aria-label={hotspot.target.label}
+                title={hotspot.target.label}
+                onClick={() => hotspot.target.targetId && onNavigate(hotspot.target.targetId)}
+              />
+            );
+          })}
+      </div>
+
+      {hotspots.length > 0 && (
         <>
+          {/* The same targets as a list: reachable by keyboard, and usable when
+              a rectangle is too small to tap accurately on a phone. */}
           <p className="muted">Tappable areas of this image:</p>
           <ul className="list">
-            {node.hotspots.map((hotspot, i) => (
+            {hotspots.map((hotspot, i) => (
               <li key={i} className="row">
                 <button
                   type="button"

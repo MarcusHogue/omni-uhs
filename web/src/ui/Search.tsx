@@ -127,6 +127,29 @@ export function Search(): JSX.Element {
   );
 }
 
+/**
+ * What distinguishes one entry from another *within* a group.
+ *
+ * The group heading already carries the title, so repeating it tells the user
+ * nothing — and a game often has several IF Archive files (an InvisiClues
+ * transcript, a step-by-step solution, a plain walkthrough), which would
+ * otherwise be four identical-looking rows.
+ */
+function describe(entry: CatalogEntry): string {
+  const parts: string[] = [];
+  if (entry.sourceKind === 'ifarchive') {
+    parts.push(entry.ref.split('/').pop() ?? entry.ref);
+  } else if (entry.sourceKind === 'strategywiki') {
+    parts.push(entry.ref);
+  } else {
+    parts.push(entry.title);
+  }
+  if (entry.meta?.year) parts.push(String(entry.meta.year));
+  if (entry.meta?.date) parts.push(entry.meta.date);
+  if (entry.meta?.size) parts.push(`${Math.max(1, Math.round(entry.meta.size / 1024))} KB`);
+  return parts.join(' · ');
+}
+
 /** The URL form a stored document records, so downloads can be matched. */
 function refUrl(entry: CatalogEntry): string {
   if (entry.sourceKind === 'ifarchive') {
@@ -176,8 +199,7 @@ function ResultRow({
       <div className="row-main">
         <span className="row-meta">
           <SourceBadge kind={entry.sourceKind} />
-          <span className="muted">{entry.title}</span>
-          {entry.meta?.year && <span className="muted">{entry.meta.year}</span>}
+          <span className="muted">{describe(entry)}</span>
           {downloaded && <span className="pill pill-offline">Available offline</span>}
         </span>
         {message && <span className={state === 'error' ? 'error' : 'muted'}>{message}</span>}
