@@ -3,7 +3,7 @@
 Written for **DSM 7.2** with **Container Manager** (called Docker on DSM 6 and
 early 7). Works on any x86-64 Synology; the published images are `linux/amd64`,
 so ARM models (DS1xxj, DS220j and friends) need the *Build on the NAS* note in
-§6.
+§D.
 
 There are two ways to run it, and the first is the one you want.
 
@@ -101,6 +101,19 @@ networks:
 Click through to **Done**; Container Manager pulls the images and starts both
 containers.
 
+> **The packages are private.** This repository is private, so GHCR will refuse
+> the pull until the NAS is logged in. Over SSH, with a classic PAT that has the
+> `read:packages` scope:
+>
+> ```bash
+> echo "$GHCR_PAT" | sudo docker login ghcr.io -u MarcusHogue --password-stdin
+> ```
+>
+> Container Manager keeps that credential and reuses it. The simpler
+> alternative is to make the two packages public (package page → Package
+> settings → Change visibility) — they hold only the app, no hint content and
+> no secrets. Failing both, build on the NAS as in §D.
+
 Two things differ from the repo's `docker-compose.local.yml`, both on purpose:
 
 - The cache is a **bind mount** to `/volume1/docker/omni-uhs/cache` rather than
@@ -181,7 +194,7 @@ Caveats worth knowing before you pick this route:
 
 ---
 
-## 5. Backups
+## C. Backups
 
 The bind mount in path A makes this easy: point **Hyper Backup** at
 `/volume1/docker/omni-uhs`. That covers the upstream cache and, in path B, the
@@ -192,7 +205,7 @@ device. Use **Settings → Export library** in the app.
 
 ---
 
-## 6. ARM models: build on the NAS
+## D. ARM models: build on the NAS
 
 The published images are amd64 only. On an ARM Synology, build them locally:
 
@@ -210,7 +223,7 @@ models (under 2 GB) may need swap enabled to get through the Vite build.
 
 ---
 
-## 7. Troubleshooting on DSM
+## E. Troubleshooting on DSM
 
 **Port 8081 is already taken.** `sudo netstat -tlnp | grep 8081`, then pick
 another and change the mapping.

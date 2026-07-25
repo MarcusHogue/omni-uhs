@@ -9,9 +9,15 @@ coverage/
 .env
 .env.local
 
-# Runtime data
-data/
-cache/
+# Runtime data.
+#
+# Anchored with a leading slash on purpose. An unanchored `cache/` matches at
+# every depth, which silently excluded `proxy/src/cache/` — the source tree
+# built fine locally and the committed tree did not.
+/data/
+/cache/
+proxy/data/
+web/data/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal
