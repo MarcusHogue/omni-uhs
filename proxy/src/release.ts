@@ -228,7 +228,27 @@ async function inspect(
   const headers = { authorization: `Bearer ${auth.token}` };
   const manifests = `https://${GHCR}/v2/${image.repository}/manifests`;
 
-  const latestRaw = await readRaw(cache, `${manifests}/latest`, config.ttl.release, headers);
+  // Keyed on what is running, not just the URL.
+  //
+  // The cache is a named volume, so it outlives the container — which means it
+  // outlives the upgrade that changes what "running" is. Keyed on the URL alone,
+  // the six-hour entry written before an upgrade was still served after it: the
+  // running tag resolved fresh to the new manifest, `:latest` came back as the
+  // *previous* build, the two digests differed, and the app reported the build
+  // it had just replaced as an available update. Observed after publishing
+  // 8293df1, which was told 89193c6 — its own parent — was newer than itself.
+  //
+  // Including the running version means an upgrade cannot read the answer
+  // computed for its predecessor. It costs exactly one extra registry read, at
+  // the one moment a fresh answer is worth having, and it fixes a rollback the
+  // same way.
+  const latestRaw = await readRaw(
+    cache,
+    `${manifests}/latest`,
+    config.ttl.release,
+    headers,
+    `ghcr:latest:${image.repository}:${running ?? 'unknown'}`,
+  );
 
   // The comparison. A tag that is not there means the running build was never
   // published under that name — reported as unknown, never as up to date.
