@@ -49,7 +49,7 @@ async function searchPlatform(
   kind: SourceKind,
   query: string,
 ): Promise<CatalogEntry[]> {
-  const hosts = allowlistedHosts(kind).slice(0, WIKI_SEARCH_MAX);
+  const hosts = allowlistedHosts(cache, kind).slice(0, WIKI_SEARCH_MAX);
   if (hosts.length === 0) return [];
 
   const perWiki = Math.max(2000, Math.floor(config.searchTimeoutMs * 0.8));
@@ -110,12 +110,12 @@ const SOURCE_NOTES: Partial<Record<SourceKind, string>> = {
 };
 
 /** What the UI needs to render the source chips without hard-coding policy. */
-export function describeSources(): SourceInfo[] {
+export function describeSources(cache: Cache): SourceInfo[] {
   return SEARCHABLE_SOURCES.map((kind) => {
     const note = SOURCE_NOTES[kind];
-    // The wiki platforms do nothing until an operator allowlists a host, so the
-    // UI needs to know which ones exist — and to say so when there are none.
-    const hosts = kind === 'fandom' || kind === 'wikigg' ? allowlistedHosts(kind) : [];
+    // The wiki platforms do nothing until a host is allowlisted, so the UI
+    // needs to know which ones exist — and to say so when there are none.
+    const hosts = kind === 'fandom' || kind === 'wikigg' ? allowlistedHosts(cache, kind) : [];
     return {
       kind,
       enabledByDefault: DEFAULT_SEARCH_SOURCES.includes(kind),

@@ -209,12 +209,23 @@ Three things make these different from every other source here.
 of wikis about everything — books, television, brands — and neither exposes a
 usable "games only" filter: Fandom's discovery API answers 403 to anything that
 is not a browser, its vertical parameter is gone, and wiki.gg has no index API
-at all. So the filter is you. Nothing is fetched from either platform until a
-host is named in `WIKI_ALLOWLIST`, one wiki at a time:
+at all. So the filter is you, one wiki at a time. Search for a game, tap
+**Look for a wiki**, and the proxy asks the addresses a wiki for it would
+plausibly live at — `blue-prince.fandom.com`, `blueprince.wiki.gg` — reporting
+each one's real name and licence. Tap **Add** and it is searchable immediately:
+the allowlist lives in the cache database, so there is nothing to restart.
 
-```
-WIKI_ALLOWLIST=animalwell.wiki.gg,blue-prince.fandom.com
-```
+Guessing from a name does miss things — Zelda's wiki is `zelda.fandom.com`,
+which no slugification of "Tears of the Kingdom" will reach — so pasting a wiki
+address from a browser tab is always accepted and skips the guessing. Settings
+lists what you have added and removes it again. `WIKI_ALLOWLIST` still exists
+for seeding a fresh container; anything named there is pinned and the app will
+not remove it.
+
+Only `*.fandom.com` and `*.wiki.gg` can be added, from the app or the
+environment. Every other upstream keeps exact-hostname matching against
+`UPSTREAM_ALLOWLIST` at boot, so nothing reachable from the UI can point the
+fetcher at an internal address.
 
 **They are reference works, not walkthroughs.** A wiki page states the answer
 in its first sentence and marks nothing as a spoiler, so rendering one as

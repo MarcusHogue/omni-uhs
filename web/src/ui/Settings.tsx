@@ -1,5 +1,6 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
+import { api, isOfflineError, type WikiSite } from '../api/client';
 import {
   getSetting,
   requestPersistence,
@@ -12,7 +13,7 @@ import {
   type ExportManifest,
   type ExportScope,
 } from '../storage/exchange';
-import { formatBytes } from './bits';
+import { ErrorNote, formatBytes, Spinner } from './bits';
 import { useAppUpdate, useLibrary, useOnline } from './hooks';
 import { isReleaseBuild, WEB_VERSION } from './update';
 import {
@@ -24,6 +25,7 @@ import {
   type TextScale,
   type ThemeId,
 } from './themes';
+import { LicenceLine, WikiFinder } from './WikiFinder';
 
 export function Settings(): JSX.Element {
   const { documents, reload } = useLibrary();
@@ -186,6 +188,8 @@ export function Settings(): JSX.Element {
           </>
         )}
       </section>
+
+      <GameWikis />
 
       <section>
         <h2>Registration-gated hints</h2>
@@ -387,5 +391,115 @@ export function Settings(): JSX.Element {
         </p>
       </section>
     </div>
+  );
+}
+
+/**
+ * The wikis this deployment may read.
+ *
+ * Fandom and wiki.gg between them host hundreds of thousands of wikis about
+ * everything, and neither offers a "games only" filter — so this list is the
+ * filter, and it is yours. Adding one takes effect immediately: the allowlist
+ * lives in the proxy's database, not in the environment, so there is nothing to
+ * restart.
+ *
+ * A host from `WIKI_ALLOWLIST` is shown but cannot be removed here. That is the
+ * operator's standing decision, and an app should not be able to quietly undo
+ * something somebody put in the environment on purpose.
+ */
+function GameWikis(): JSX.Element {
+  const [wikis, setWikis] = useState<WikiSite[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async (): Promise<void> => {
+    setLoading(true);
+    try {
+      const response = await api.allowedWikis();
+      setWikis(response.wikis);
+      setError(null);
+    } catch (caught) {
+      setError(
+        isOfflineError(caught)
+          ? 'The proxy is not reachable, so the wiki list cannot be shown.'
+          : (caught as Error).message,
+      );
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  return (
+    <section>
+      <h2>Game wikis</h2>
+      <p className="muted">
+        Fandom and wiki.gg host wikis for almost every game, and for a great many things
+        that are not games. Nothing from either is searched until you add it here. Pages
+        are re-shaped on the way in so answers reveal one at a time, and reference pages —
+        stat tables, item lists — are skipped.
+      </p>
+
+      {loading && <Spinner label="Loading wikis…" />}
+      {error && <ErrorNote error={error} />}
+
+      {!loading && wikis.length === 0 && (
+        <p className="muted">No wikis yet. Search for a game below to find one.</p>
+      )}
+
+      {wikis.length > 0 && (
+        <ul className="list">
+          {wikis.map((wiki) => (
+            <li className="row" key={wiki.host}>
+              <div className="row-main">
+                <span className="row-title">{wiki.sitename ?? wiki.host}</span>
+                <span className="row-meta">
+                  <span className="muted mono">{wiki.host}</span>
+                  {wiki.pinned && (
+                    <span className="pill" title="From WIKI_ALLOWLIST in the environment.">
+                      pinned
+                    </span>
+                  )}
+                </span>
+                {wiki.error ? (
+                  <span className="error">{wiki.error}</span>
+                ) : (
+                  <LicenceLine
+                    license={wiki.license}
+                    personalUseOnly={wiki.personalUseOnly}
+                  />
+                )}
+              </div>
+              {!wiki.pinned && (
+                <button
+                  type="button"
+                  className="row-action"
+                  onClick={() => {
+                    void api
+                      .forgetWiki(wiki.host)
+                      .then(load)
+                      .catch((caught: Error) => setError(caught.message));
+                  }}
+                >
+                  Remove
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <h3>Add a wiki</h3>
+      <p className="muted">
+        Type a game&rsquo;s name and it will check the addresses a wiki for it would
+        plausibly live at. Neither platform publishes a searchable index, so that is
+        guesswork and it does miss things — if you already found the wiki in a browser,
+        paste its address instead and it will be checked directly.
+      </p>
+      <WikiFinder showInput onAdded={() => void load()} />
+    </section>
   );
 }

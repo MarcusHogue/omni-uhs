@@ -16,6 +16,7 @@ import { getSetting } from '../storage/db';
 import { ErrorNote, SOURCE_LABELS, SourceBadge, Spinner, Warnings } from './bits';
 import { useDebounced, useLatest, useLibrary, useOfflineRefs, useOnline } from './hooks';
 import { refUrl, wikiPageUrl } from './refs';
+import { WikiFinder } from './WikiFinder';
 
 /**
  * Chips to show before `/api/catalog/sources` answers — and if it never does.
@@ -65,6 +66,12 @@ export function Search(): JSX.Element {
    * for, so hand them one.
    */
   const [challengeLink, setChallengeLink] = useState<string | null>(null);
+  /**
+   * Bumped when a wiki is added, to re-run both the source list and the search.
+   * Adding one is only useful if the results you were already looking at pick
+   * it up without being retyped.
+   */
+  const [wikisAdded, setWikisAdded] = useState(0);
 
   const debounced = useDebounced(query, DEBOUNCE_MS);
   const runLatest = useLatest();
@@ -81,6 +88,8 @@ export function Search(): JSX.Element {
   // Ask the server which sources it has and which it considers default. A
   // failure here is not worth surfacing: the fallback list is already correct
   // for a stock deployment, and a real outage will show up on the search itself.
+  // Re-runs after a wiki is added, which changes both the hosts and whether the
+  // platform chips are usable at all.
   useEffect(() => {
     let cancelled = false;
     api
@@ -94,7 +103,7 @@ export function Search(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [wikisAdded]);
 
   useEffect(() => {
     const trimmed = debounced.trim();
@@ -147,7 +156,7 @@ export function Search(): JSX.Element {
         setSearching(false);
       }
     });
-  }, [debounced, selected, runLatest]);
+  }, [debounced, selected, wikisAdded, runLatest]);
 
   return (
     <>
@@ -166,7 +175,7 @@ export function Search(): JSX.Element {
           const active = selected.includes(source.kind);
           const disabled = unconfigured(source);
           const title = disabled
-            ? `No ${SOURCE_LABELS[source.kind]} wikis are allowlisted. Add one to WIKI_ALLOWLIST.`
+            ? `No ${SOURCE_LABELS[source.kind]} wikis have been added yet. Search for a game and use “Look for a wiki”.`
             : source.note;
           return (
             <button
@@ -244,6 +253,16 @@ export function Search(): JSX.Element {
         groups.length === 0 && (
           <p className="muted">Nothing found for “{debounced.trim()}”.</p>
         )}
+
+      {/* A game with no hint file may still have a wiki. Offered after the
+          results rather than instead of them: this costs real requests to
+          Fandom and wiki.gg, so it happens when asked and not before. */}
+      {!searching && debounced.trim().length >= MIN_QUERY && (
+        <WikiFinder
+          query={debounced.trim()}
+          onAdded={() => setWikisAdded((n) => n + 1)}
+        />
+      )}
     </>
   );
 }

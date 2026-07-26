@@ -55,10 +55,8 @@ export function kindForHost(host: string): SourceKind | null {
   return null;
 }
 
-/** Hosts from WIKI_ALLOWLIST that belong to a given source. */
-export function allowlistedHosts(kind: SourceKind): string[] {
-  return config.wikiAllowlist.filter((host) => kindForHost(host) === kind);
-}
+/** The platforms a wiki can be added from at runtime. */
+export const WIKI_PLATFORMS: SourceKind[] = ['fandom', 'wikigg'];
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS wiki_site (
@@ -73,18 +71,119 @@ CREATE TABLE IF NOT EXISTS wiki_site (
   gamepedia        INTEGER NOT NULL,
   updated_at       INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS wiki_allow (
+  host             TEXT PRIMARY KEY,
+  kind             TEXT NOT NULL,
+  added_at         INTEGER NOT NULL
+);
 `;
 
-let ready = false;
+/**
+ * Which caches have had the tables created.
+ *
+ * Per instance, not a module-level boolean: `setCache` can swap the cache out —
+ * every test does, and a restart with a fresh cache file would too — and a
+ * global flag would then skip `CREATE TABLE` on a database that has none,
+ * turning every wiki lookup into a SQL error.
+ */
+const prepared = new WeakSet<Cache>();
+
 function ensureTable(cache: Cache): void {
-  if (ready) return;
+  if (prepared.has(cache)) return;
   cache.db.exec(SCHEMA);
-  ready = true;
+  prepared.add(cache);
 }
 
-/** Test seam: forget that the table was created (a new Cache needs it again). */
-export function resetWikiRegistry(): void {
-  ready = false;
+/* -------------------------------------------------------------- allowlist */
+
+/**
+ * Which wikis this deployment may read.
+ *
+ * Two sources, deliberately:
+ *
+ * - **`WIKI_ALLOWLIST`** is the operator's standing decision. It seeds a fresh
+ *   container and cannot be revoked from the app — if it is in the environment,
+ *   somebody meant it.
+ * - **The `wiki_allow` table** is what you add from the UI. It survives
+ *   restarts, takes effect immediately, and can be removed again.
+ *
+ * Adding is bounded by `kindForHost`: only `*.fandom.com` and `*.wiki.gg` are
+ * ever accepted, so nothing reachable from the app can point the fetcher at an
+ * internal address. Every other host still has to be listed in
+ * `UPSTREAM_ALLOWLIST` and matched exactly.
+ */
+const envAllowlist = (): string[] =>
+  config.wikiAllowlist.map((host) => host.toLowerCase()).filter((host) => kindForHost(host));
+
+/** True for a host named in the environment, which the app must not remove. */
+export function isPinned(host: string): boolean {
+  return envAllowlist().includes(host.toLowerCase());
+}
+
+function storedAllowlist(cache: Cache): { host: string; kind: SourceKind }[] {
+  ensureTable(cache);
+  return cache.db.prepare('SELECT host, kind FROM wiki_allow ORDER BY host').all() as {
+    host: string;
+    kind: SourceKind;
+  }[];
+}
+
+/** Every allowlisted wiki host, from both sources. */
+export function allowedWikiHosts(cache: Cache): string[] {
+  const hosts = new Set(envAllowlist());
+  for (const row of storedAllowlist(cache)) hosts.add(row.host);
+  return [...hosts].sort();
+}
+
+export function isWikiAllowed(cache: Cache, host: string): boolean {
+  return allowedWikiHosts(cache).includes(host.toLowerCase());
+}
+
+/** Allowlisted hosts belonging to one platform. */
+export function allowlistedHosts(cache: Cache, kind: SourceKind): string[] {
+  return allowedWikiHosts(cache).filter((host) => kindForHost(host) === kind);
+}
+
+/**
+ * Add a wiki, after confirming it is one.
+ *
+ * The `describeWiki` call is not a formality: it is what proves the host is a
+ * real MediaWiki rather than a parked domain, and it is where the licence comes
+ * from. Nothing is allowlisted on the strength of its name alone.
+ */
+export async function allowWiki(cache: Cache, host: string): Promise<WikiSite> {
+  const lower = host.toLowerCase().replace(/\.$/, '');
+  const kind = kindForHost(lower);
+  if (!kind || !WIKI_PLATFORMS.includes(kind)) {
+    throw Object.assign(
+      new Error(`only Fandom and wiki.gg wikis can be added here: ${host}`),
+      { statusCode: 400 },
+    );
+  }
+
+  const site = await describeWiki(cache, lower);
+  ensureTable(cache);
+  cache.db
+    .prepare(
+      `INSERT INTO wiki_allow (host, kind, added_at) VALUES (?, ?, ?)
+       ON CONFLICT(host) DO UPDATE SET kind = excluded.kind`,
+    )
+    .run(lower, kind, Date.now());
+  log.catalog.info(
+    { host: lower, kind, license: site.license, personalUseOnly: site.personalUseOnly },
+    `allowlisted ${lower} (${site.license})`,
+  );
+  return site;
+}
+
+/** Remove a wiki. Returns false for one pinned by the environment. */
+export function forgetWiki(cache: Cache, host: string): boolean {
+  const lower = host.toLowerCase();
+  if (isPinned(lower)) return false;
+  ensureTable(cache);
+  cache.db.prepare('DELETE FROM wiki_allow WHERE host = ?').run(lower);
+  log.catalog.info({ host: lower }, `removed ${lower} from the wiki allowlist`);
+  return true;
 }
 
 interface SiteinfoPayload {

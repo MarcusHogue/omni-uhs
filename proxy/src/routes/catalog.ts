@@ -9,9 +9,8 @@ import type { FastifyInstance } from 'fastify';
 
 import { getCache } from '../cache/index.js';
 import { listIfArchive, refreshIfArchiveCatalog } from '../catalog/ifarchive.js';
-import { config } from '../config.js';
 import { STRATEGYWIKI, listWikiPages } from '../catalog/mediawiki.js';
-import { targetFor } from '../catalog/wikis.js';
+import { isWikiAllowed, targetFor } from '../catalog/wikis.js';
 import {
   DEFAULT_SEARCH_SOURCES,
   SEARCHABLE_SOURCES,
@@ -28,7 +27,7 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
   // The UI reads this rather than hard-coding the list, so SEARCH_SOURCES on
   // the server is what actually decides the default chips.
   app.get('/api/catalog/sources', async (_request, reply) =>
-    reply.send({ sources: describeSources() }),
+    reply.send({ sources: describeSources(getCache()) }),
   );
 
   app.get('/api/catalog/search', async (request, reply) => {
@@ -108,10 +107,11 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
             .code(400)
             .send({ error: `host is required for ${source} (e.g. ?host=animalwell.wiki.gg)` });
         }
-        if (!config.wikiAllowlist.includes(host.toLowerCase())) {
-          return reply
-            .code(400)
-            .send({ error: `wiki host not allowed: ${host}`, hint: 'add it to WIKI_ALLOWLIST' });
+        if (!isWikiAllowed(cache, host)) {
+          return reply.code(400).send({
+            error: `wiki host not allowed: ${host}`,
+            hint: 'add it in Settings, or to WIKI_ALLOWLIST',
+          });
         }
         try {
           const target = await targetFor(cache, host.toLowerCase());

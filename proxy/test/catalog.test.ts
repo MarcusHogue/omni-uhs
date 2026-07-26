@@ -10,7 +10,16 @@ import { parseIfdbSearch } from '../src/catalog/ifdb.js';
 import { parseAllPages, parseRightsInfo, parseWikiSearch, apiUrl } from '../src/catalog/mediawiki.js';
 import { NORMALIZE_VECTORS, normalizeTitle } from '../src/catalog/normalize.js';
 import { describeSources, groupEntries } from '../src/catalog/search.js';
-import { describeWiki, kindForHost, resetWikiRegistry, siteTarget } from '../src/catalog/wikis.js';
+import { fallbackSlugs, hostFromQuery, slugCandidates } from '../src/catalog/discover.js';
+import {
+  allowWiki,
+  allowedWikiHosts,
+  describeWiki,
+  forgetWiki,
+  isWikiAllowed,
+  kindForHost,
+  siteTarget,
+} from '../src/catalog/wikis.js';
 import type { CatalogEntry } from '../src/catalog/types.js';
 import { parseIndexHtml, parseUpdateCgi, searchUhsCatalog } from '../src/catalog/uhs.js';
 
@@ -358,17 +367,76 @@ describe('search relevance', () => {
 });
 
 describe('source advertisement', () => {
+  let dir: string;
+  let cache: Cache;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'hint-sources-'));
+    cache = new Cache(dir);
+  });
+
+  afterEach(() => {
+    cache.close();
+    rmSync(dir, { recursive: true, force: true });
+  });
+
   it('marks StrategyWiki as off by default and says why', () => {
-    const strategywiki = describeSources().find((source) => source.kind === 'strategywiki');
+    const strategywiki = describeSources(cache).find((source) => source.kind === 'strategywiki');
     expect(strategywiki?.enabledByDefault).toBe(false);
     expect(strategywiki?.note).toMatch(/Cloudflare/);
   });
 
   it('still advertises it as searchable, so it can be turned on', () => {
-    expect(describeSources().map((source) => source.kind)).toContain('strategywiki');
-    expect(describeSources().filter((source) => source.enabledByDefault).map((s) => s.kind)).toEqual(
-      ['uhs', 'ifarchive', 'ifdb'],
-    );
+    expect(describeSources(cache).map((source) => source.kind)).toContain('strategywiki');
+    expect(
+      describeSources(cache).filter((source) => source.enabledByDefault).map((s) => s.kind),
+    ).toEqual(['uhs', 'ifarchive', 'ifdb']);
+  });
+});
+
+describe('wiki discovery', () => {
+  it('turns a game name into the slugs a wiki might live at', () => {
+    expect(slugCandidates('Blue Prince')).toContain('blue-prince');
+    expect(slugCandidates('Animal Well')).toContain('animalwell');
+    // Articles and joining words are not part of a slug — but the literal form
+    // is kept too, because "The Witness" really is thewitness.fandom.com.
+    expect(slugCandidates('The Legend of Zelda')).toContain('legend-zelda');
+    expect(slugCandidates('The Legend of Zelda')).toContain('the-legend-of-zelda');
+    expect(slugCandidates('   ')).toEqual([]);
+  });
+
+  it('keeps the first-word guess for the fallback round only', () => {
+    // A series title hangs off a short wiki, so this rescues Zelda...
+    expect(fallbackSlugs('Zelda Tears of the Kingdom')).toEqual(['zelda']);
+    // ...but tried in parallel it would offer blue.fandom.com — a real wiki,
+    // about the colour — next to the right answer. It runs only when the full
+    // name found nothing.
+    expect(slugCandidates('Blue Prince')).not.toContain('blue');
+    // Nothing to fall back to from a single word, or from an initial too short
+    // to be anyone's wiki.
+    expect(fallbackSlugs('Myst')).toEqual([]);
+    expect(fallbackSlugs('Ico Shadow of the Colossus')).toEqual([]);
+  });
+
+  it('strips punctuation and accents rather than putting them in a hostname', () => {
+    expect(slugCandidates('Pokémon: Red!')).toContain('pokemon-red');
+    for (const slug of slugCandidates('Zork I: The Great Underground Empire')) {
+      expect(slug).toMatch(/^[a-z0-9-]+$/);
+    }
+  });
+
+  it('takes a pasted address, at any depth, over guessing', () => {
+    expect(hostFromQuery('blue-prince.fandom.com')).toBe('blue-prince.fandom.com');
+    expect(hostFromQuery('https://animalwell.wiki.gg/wiki/Eggs')).toBe('animalwell.wiki.gg');
+    expect(hostFromQuery('  HTTPS://Terraria.Wiki.GG/  ')).toBe('terraria.wiki.gg');
+  });
+
+  it('refuses an address that is not one of the two platforms', () => {
+    // The suffix rule is the SSRF boundary for anything added at runtime.
+    expect(hostFromQuery('http://169.254.169.254/latest/meta-data/')).toBeNull();
+    expect(hostFromQuery('https://internal.corp')).toBeNull();
+    expect(hostFromQuery('https://blue-prince.fandom.com.evil.test/')).toBeNull();
+    expect(hostFromQuery('not a url')).toBeNull();
   });
 });
 
@@ -433,8 +501,6 @@ describe('wiki registry', () => {
     beforeEach(() => {
       dir = mkdtempSync(join(tmpdir(), 'hint-wikis-'));
       cache = new Cache(dir);
-      // The table is created once per process; a fresh Cache needs it again.
-      resetWikiRegistry();
     });
 
     afterEach(() => {
@@ -550,6 +616,47 @@ describe('wiki registry', () => {
 
     it('refuses a host that belongs to no known platform', async () => {
       await expect(describeWiki(cache, 'evil.example.com')).rejects.toThrow(/not a recognised/);
+    });
+
+    it('adds and removes a wiki at runtime, with no restart in between', async () => {
+      stubSiteinfo({
+        query: {
+          general: { sitename: 'Blue Prince Wiki', scriptpath: '', articlepath: '/wiki/$1' },
+          rightsinfo: { text: 'CC BY-SA 4.0', url: '' },
+        },
+      });
+      expect(isWikiAllowed(cache, 'blue-prince.fandom.com')).toBe(false);
+
+      const site = await allowWiki(cache, 'Blue-Prince.Fandom.com');
+      expect(site.sitename).toBe('Blue Prince Wiki');
+      // Case-folded on the way in, so the allowlist has one spelling of a host.
+      expect(allowedWikiHosts(cache)).toContain('blue-prince.fandom.com');
+      expect(isWikiAllowed(cache, 'blue-prince.fandom.com')).toBe(true);
+
+      expect(forgetWiki(cache, 'blue-prince.fandom.com')).toBe(true);
+      expect(isWikiAllowed(cache, 'blue-prince.fandom.com')).toBe(false);
+    });
+
+    it('refuses to add anything that is not one of the two platforms', async () => {
+      // This is the SSRF boundary: the app can widen the allowlist, but only
+      // ever within Fandom and wiki.gg.
+      for (const host of [
+        'internal.corp',
+        '169.254.169.254',
+        'blue-prince.fandom.com.evil.test',
+        'strategywiki.org',
+      ]) {
+        await expect(allowWiki(cache, host)).rejects.toThrow(/Fandom and wiki\.gg/);
+      }
+      expect(allowedWikiHosts(cache)).toEqual([]);
+    });
+
+    it('does not record a host that turned out not to be a wiki', async () => {
+      vi.spyOn(cache, 'fetch').mockRejectedValue(
+        Object.assign(new Error('Upstream responded 404'), { statusCode: 404 }),
+      );
+      await expect(allowWiki(cache, 'nosuchgame.fandom.com')).rejects.toThrow();
+      expect(allowedWikiHosts(cache)).toEqual([]);
     });
   });
 

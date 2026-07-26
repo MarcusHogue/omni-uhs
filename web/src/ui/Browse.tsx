@@ -111,10 +111,10 @@ function SourcePicker(): JSX.Element {
 
       {sources !== null && platforms.length === 0 && (
         <p className="muted">
-          Fandom and wiki.gg host hundreds of unrelated wikis, so nothing from either is
-          reachable until you name the ones you want in <code>WIKI_ALLOWLIST</code> — for
-          example{' '}
-          <code>WIKI_ALLOWLIST=animalwell.wiki.gg,blue-prince.fandom.com</code>.
+          Fandom and wiki.gg host wikis for almost every game, and for a great many things
+          that are not games, so nothing from either is listed until you add the ones you
+          want. Search for a game and use &ldquo;Look for a wiki&rdquo;, or add one under{' '}
+          <Link to="/settings">Settings</Link>.
         </p>
       )}
 
@@ -340,9 +340,15 @@ function WikiHeader({
   if (!host) {
     return (
       <p className="muted">
-        {loaded
-          ? 'No wikis are allowlisted for this platform. Add one to WIKI_ALLOWLIST to browse it.'
-          : 'Loading wikis…'}
+        {loaded ? (
+          <>
+            No wikis have been added for this platform yet.{' '}
+            <Link to="/settings">Add one in Settings</Link> and it is browsable straight
+            away.
+          </>
+        ) : (
+          'Loading wikis…'
+        )}
       </p>
     );
   }
