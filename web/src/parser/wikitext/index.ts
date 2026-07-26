@@ -112,6 +112,23 @@ const SPOILER_TEMPLATES = /^(spoiler|hidden|collapse|mbox spoiler)/i;
 const NAV_TEMPLATE = /^(header|footer)[ _]nav\b/i;
 
 /**
+ * Templates that arrange a page rather than say anything on it.
+ *
+ * Needed because `templateText` reads a lone unnamed parameter as the word the
+ * template stands in for, and that is right for `{{roomtype|Puzzle}}` and wrong
+ * for `{{floatingtoc|left}}` — where "left" is a position, and went into the
+ * prose of every Chrono Trigger chapter as a word. Nothing about the *value*
+ * separates the two cases: "left" is a short lowercase word with letters in it,
+ * exactly like "Puzzle". Only the name does.
+ *
+ * `{{-}}` is a float clear, `{{col}}`/`{{listcol}}` are the column layout the
+ * Table of Contents is built from, and `{{control selector}}` is the SNES/DS
+ * switcher at the top of a page.
+ */
+const LAYOUT_TEMPLATE =
+  /^(-|clear|floatingtoc|toc|col|listcol|subtoc\d?|control selector|featured|stub|prettytable)$/i;
+
+/**
  * Namespaced links that are filing, not prose.
  *
  * `[[Category:Creatures]]` is how a page declares its own category. It renders
@@ -237,12 +254,65 @@ export function stripMarkup(text: string, expanded: Record<string, string> = {})
     // Templates go too. Without this a section title kept them verbatim, and
     // Obra Dinn's transcript headings read `Transcript {{play|End_pt1.ogg}}`.
     extractTemplates(removed(text), expanded).text
+      // A label that *was* a template has just been emptied: StrategyWiki writes
+      // `[[../Tabs|{{ctcontrol|Power Tab|Strength Capsule}}]]`, and dropping the
+      // template leaves `[[../Tabs|]]`, which neither pattern below matches — so
+      // the residue `../Tabs|` reached a section heading verbatim. Closing it up
+      // first makes it a plain link, and the target's own name stands in.
+      .replace(/\[\[([^\]|]+)\|\s*\]\]/g, '[[$1]]')
       .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
-      .replace(/\[\[([^\]]+)\]\]/g, '$1'),
+      .replace(/\[\[([^\]]+)\]\]/g, (_, target: string) => linkLeaf(target)),
   ).trim();
 }
 
 const WIKILINK = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+
+/**
+ * What to call a link that has no label of its own.
+ *
+ * `[[Chrono Trigger/Characters#Lavos]]` is a pointer to a *section of a
+ * sub-page*, and printing it whole puts a file path in the middle of a sentence.
+ * The last segment is the part a reader recognises, and it is what MediaWiki
+ * itself displays for a `[[/Sub]]` link.
+ */
+function linkLeaf(target: string): string {
+  const withoutAnchor = target.split('#')[0]!.trim() || target.trim();
+  const leaf = withoutAnchor.replace(/^[./]+/, '').split('/').pop() ?? withoutAnchor;
+  return (leaf || withoutAnchor).replace(/_/g, ' ');
+}
+
+/**
+ * Resolve a link the way MediaWiki resolves it on a given page.
+ *
+ * StrategyWiki's house style is relative: `Chrono Trigger/The Millennial Fair`
+ * refers to its sibling as `[[../Characters#Crono|Crono]]`, not by full title.
+ * Left alone, that normalises to `../Characters`, which matches no downloaded
+ * page — so every cross-reference inside a StrategyWiki game silently stopped
+ * being a link and became plain text. There are dozens per chapter.
+ *
+ * `../X` is a sibling (up one level from the current page), `/X` is a child.
+ * Without a page to resolve against — which is every caller outside a page
+ * parse — the link is returned as it was.
+ */
+export function resolveRelative(target: string, pageTitle = ''): string {
+  const trimmed = target.trim();
+  if (!pageTitle) return trimmed;
+
+  if (trimmed.startsWith('/')) return pageTitle + trimmed;
+  if (!trimmed.startsWith('../')) return trimmed;
+
+  // Each `../` climbs one level from the current page's own path.
+  let base = pageTitle;
+  let rest = trimmed;
+  while (rest.startsWith('../')) {
+    rest = rest.slice(3);
+    const cut = base.lastIndexOf('/');
+    if (cut === -1) break;
+    base = base.slice(0, cut);
+  }
+  // A bare `..` with no remainder means the parent page itself.
+  return rest ? `${base}/${rest}` : base;
+}
 
 /** How MediaWiki itself compares two page titles. */
 export function normalizePageTitle(title: string): string {
@@ -263,6 +333,8 @@ export function normalizePageTitle(title: string): string {
 export function toInline(
   text: string,
   resolve?: (title: string) => string | undefined,
+  /** The page this text is on, so `[[../Sibling]]` can be resolved against it. */
+  pageTitle = '',
 ): Inline[] {
   const source = removed(text);
   const out: Inline[] = [];
@@ -280,8 +352,12 @@ export function toInline(
     index = match.index + match[0].length;
 
     const target = match[1]!;
-    const label = cleaned(match[2] ?? target).trim();
-    const targetId = resolve?.(normalizePageTitle(target));
+    // A label whose whole content was a template is empty by the time it gets
+    // here — `[[../Tabs|{{ctcontrol|Power Tab|Strength Capsule}}]]` — and
+    // pushing nothing deleted the pointer along with the words. The target's
+    // own leaf name is what MediaWiki would have shown without a label.
+    const label = cleaned(match[2] ?? target).trim() || linkLeaf(target);
+    const targetId = resolve?.(normalizePageTitle(resolveRelative(target, pageTitle)));
     if (targetId && label) out.push({ kind: 'link', label, targetId });
     else push(label);
   }
@@ -339,6 +415,7 @@ function templateText(buffer: string): string | null {
   // like a lone unnamed parameter — so the reader was shown `Moss]]`.
   const parts = splitParams(buffer);
   const name = parts[0]!.trim();
+  if (LAYOUT_TEMPLATE.test(name)) return null;
   const unnamed = parts.slice(1).filter((part) => !part.includes('='));
   if (unnamed.length === 0) return null;
   if (unnamed.length > 1 && !TEXT_TEMPLATE.test(name)) return null;
@@ -453,6 +530,7 @@ export function collectExpandable(wikitext: string): string[] {
     if (!inner || inner.length > 300) continue;
     if (SPOILER_TEMPLATES.test(inner)) continue;
     if (NAV_TEMPLATE.test(inner)) continue;
+    if (LAYOUT_TEMPLATE.test(splitParams(inner)[0]!.trim())) continue;
     if (PAGE_CONTEXT.test(inner)) continue;
     if (templateText(inner) !== null) continue;
     found.add(inner);
@@ -703,6 +781,8 @@ function toBlocks(
   resolve?: Resolver,
   withImages = false,
   expanded: Record<string, string> = {},
+  /** The page this section is on, for resolving `[[../Sibling]]` links. */
+  pageTitle = '',
 ): Block[] {
   const { text, images: fromGalleries } = extractGalleries(body);
   const blocks: Block[] = [];
@@ -712,7 +792,7 @@ function toBlocks(
   let pending: ImageRef[] = [];
 
   const push = (raw: string, spoiler: boolean): void => {
-    const content = toInline(raw, resolve);
+    const content = toInline(raw, resolve, pageTitle);
     const images = pending;
     pending = [];
     // A picture with no prose is still a block: on Blue Prince a section is
@@ -850,7 +930,7 @@ function pageToSubject(
     // they are rows, and rows are what you scroll past.
     if (rank && isNeverHint(section.title)) continue;
 
-    const blocks = toBlocks(section.body, resolve, images, expanded);
+    const blocks = toBlocks(section.body, resolve, images, expanded, page.title);
 
     let target = root;
     if (section.title) {

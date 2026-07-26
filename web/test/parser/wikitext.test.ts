@@ -473,6 +473,76 @@ describe('markup that is not markup', () => {
     // `<math>` goes; the arithmetic inside it is the content.
     expect(stripMarkup('<math>0 + 5 + 13 = 18</math>')).toBe('0 + 5 + 13 = 18');
   });
+
+  it('does not read a layout template\'s parameter as a word', () => {
+    // A lone unnamed parameter is normally the word the template stands in for
+    // — `{{roomtype|Puzzle}}` — and nothing about the *value* separates that
+    // from `{{floatingtoc|left}}`, where "left" is a position. Chrono Trigger
+    // puts one at the top of every chapter, so "left" opened every chapter.
+    expect(stripMarkup('{{floatingtoc|left}}After naming the protagonist')).toBe(
+      'After naming the protagonist',
+    );
+    expect(stripMarkup('{{col|4|begin}}Gameplay')).toBe('Gameplay');
+    expect(stripMarkup('{{control selector|SNES,DS}}Prose')).toBe('Prose');
+    // And a template that really is standing in for a word still is.
+    expect(stripMarkup('a long {{roomtype|Puzzle}};')).toBe('a long Puzzle;');
+  });
+
+  it('keeps the pointer when a link label was nothing but a template', () => {
+    // StrategyWiki writes `[[../Tabs|{{ctcontrol|Power Tab|Strength Capsule}}]]`
+    // — two unnamed parameters, so the template is dropped as unreadable, which
+    // emptied the label and left `[[../Tabs|]]`. Neither link pattern matches
+    // that, so a section heading showed the residue `../Tabs|`, and in prose the
+    // whole reference vanished. The target's own name stands in for it.
+    expect(stripMarkup('There is one [[../Tabs|{{ctcontrol|Power Tab|Capsule}}]] to grab')).toBe(
+      'There is one Tabs to grab',
+    );
+    expect(stripMarkup('the [[Chrono Trigger/Characters#Lavos]] fight')).toBe(
+      'the Characters fight',
+    );
+  });
+});
+
+describe('relative links', () => {
+  // StrategyWiki's house style, and it was silently costing every cross-
+  // reference in a game. `Chrono Trigger/The Millennial Fair` points at its
+  // sibling as `[[../Characters#Crono|Crono]]`, which normalised to
+  // `../Characters` — matching no downloaded page — so the link quietly became
+  // plain text. There are dozens per chapter.
+  const parse = (): ParseResult =>
+    parseWikiWalkthrough(
+      [
+        {
+          title: 'Chrono Trigger/The Millennial Fair',
+          revision: '1',
+          wikitext: 'Talk to [[../Characters#Crono|Crono]] and see [[/Shops|the shops]].',
+        },
+        { title: 'Chrono Trigger/Characters', revision: '2', wikitext: 'Crono is the hero.' },
+        {
+          title: 'Chrono Trigger/The Millennial Fair/Shops',
+          revision: '3',
+          wikitext: 'Melchior sells swords.',
+        },
+      ],
+      { ...OPTIONS, gameTitle: 'Chrono Trigger' },
+    );
+
+  it('resolves ../sibling and /child against the page they are on', () => {
+    const { document } = parse();
+    const links = [...walk(document.root)]
+      .flatMap((n) => (n.type === 'text' ? n.content : []))
+      .filter((i) => i.kind === 'link');
+    expect(links.map((l) => l.label)).toEqual(['Crono', 'the shops']);
+    // And they point somewhere real, which is the whole difference.
+    const ids = new Set([...walk(document.root)].map((n) => n.id));
+    for (const link of links) expect(ids.has(link.targetId)).toBe(true);
+  });
+
+  it('leaves a link alone when there is no page to resolve it against', () => {
+    // `stripMarkup` has no page context, so `../X` cannot mean anything; it
+    // must not be guessed at, only rendered by its leaf name.
+    expect(stripMarkup('see [[../Characters|the cast]]')).toBe('see the cast');
+  });
 });
 
 describe('orderedLinks', () => {
