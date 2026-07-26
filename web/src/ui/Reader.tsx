@@ -1,7 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import type { HintGroupNode, ImageNode, Inline, Node, TableNode, TextNode } from '../parser/ast';
+import type {
+  HintGroupNode,
+  ImageNode,
+  Inline,
+  Node,
+  TableCell,
+  TableNode,
+  TextNode,
+} from '../parser/ast';
 import type { WikiTransport } from '../api/client';
 import { strategyWikiTransport, wikiTransport } from '../api/client';
 import {
@@ -238,7 +246,13 @@ function NodeView(props: ViewProps): JSX.Element {
         />
       );
     case 'table':
-      return <TableView node={node} onNavigate={props.onNavigate} />;
+      return (
+        <TableView
+          node={node}
+          onNavigate={props.onNavigate}
+          {...(props.wiki ? { wiki: props.wiki } : {})}
+        />
+      );
     case 'image':
       return <ImageView node={node} onNavigate={props.onNavigate} />;
     case 'link':
@@ -409,7 +423,12 @@ function HintsView({
               {/* Inside the revealed <li> for the same reason: a table behind a
                   spoiler template is the answer, not an illustration. */}
               {hint.tables?.map((table, n) => (
-                <TableView key={table.id ?? n} node={table} onNavigate={onNavigate} />
+                <TableView
+                  key={table.id ?? n}
+                  node={table}
+                  onNavigate={onNavigate}
+                  {...(wiki ? { wiki } : {})}
+                />
               ))}
             </div>
           </li>
@@ -446,13 +465,43 @@ function HintsView({
  * without it is the *page* scrolling sideways — every other row dragged out of
  * alignment by one table.
  */
+/**
+ * One cell.
+ *
+ * Declared out here rather than inside `TableView`. A component defined during
+ * render is a new type on every render, so React unmounts and remounts it — and
+ * `ImageFigure` holds a blob URL in state, which would be revoked and rebuilt
+ * for every icon each time the table re-rendered.
+ */
+function CellView({
+  cell,
+  onNavigate,
+  wiki,
+}: {
+  cell: TableCell;
+  onNavigate: (id: string) => void;
+  wiki?: WikiTransport;
+}): JSX.Element {
+  return (
+    <>
+      {cell.images?.map((image, n) => (
+        <ImageFigure key={image.id ?? n} node={image} compact {...(wiki ? { wiki } : {})} />
+      ))}
+      <InlineRuns content={cell.content} onNavigate={onNavigate} />
+    </>
+  );
+}
+
 function TableView({
   node,
   onNavigate,
+  wiki,
 }: {
   node: TableNode;
   onNavigate: (id: string) => void;
+  wiki?: WikiTransport;
 }): JSX.Element {
+
   return (
     <div className="tablenode">
       <h2>{node.label}</h2>
@@ -463,7 +512,7 @@ function TableView({
               <tr>
                 {node.headers.map((cell, n) => (
                   <th key={n}>
-                    <InlineRuns content={cell} onNavigate={onNavigate} />
+                    <CellView cell={cell} onNavigate={onNavigate} {...(wiki ? { wiki } : {})} />
                   </th>
                 ))}
               </tr>
@@ -474,7 +523,7 @@ function TableView({
               <tr key={r}>
                 {row.map((cell, c) => (
                   <td key={c}>
-                    <InlineRuns content={cell} onNavigate={onNavigate} />
+                    <CellView cell={cell} onNavigate={onNavigate} {...(wiki ? { wiki } : {})} />
                   </td>
                 ))}
               </tr>
@@ -544,7 +593,23 @@ function useBlobUrl(bytes: Uint8Array | null, mime: string): string | null {
  * Prince puzzle the caption is "Solution to the Antechamber door", so a silent
  * gap there is the difference between an answer and a dead end.
  */
-function ImageFigure({ node, wiki }: { node: ImageNode; wiki?: WikiTransport }): JSX.Element {
+function ImageFigure({
+  node,
+  wiki,
+  /**
+   * A table cell's picture: the image alone.
+   *
+   * The caption and the fetch-full-size affordance are right beside a hint,
+   * where a picture is often the answer and its caption says what it shows. In
+   * a cell they are noise — the row already names the thing, and a 72px item
+   * icon has nothing to enlarge.
+   */
+  compact = false,
+}: {
+  node: ImageNode;
+  wiki?: WikiTransport;
+  compact?: boolean;
+}): JSX.Element {
   const [bytes, setBytes] = useState<Uint8Array | null>(
     node.data.length > 0 ? node.data : null,
   );
@@ -591,6 +656,13 @@ function ImageFigure({ node, wiki }: { node: ImageNode; wiki?: WikiTransport }):
   };
 
   const omitted = node.source?.omitted;
+
+  // A cell's picture and nothing else. An icon that was not downloaded leaves
+  // no gap to explain — the cell's own text already names the thing — so the
+  // "Not downloaded" notice would be worse than the missing picture.
+  if (compact) {
+    return url ? <img className="cell-image" src={url} alt={node.label} loading="lazy" /> : <></>;
+  }
 
   return (
     <figure className="hint-image">

@@ -34,7 +34,7 @@
  * of the syntax and is handled below.
  */
 
-import type { Inline } from '../ast';
+import type { TableNode } from '../ast';
 
 export interface TableRef {
   caption: string;
@@ -235,8 +235,8 @@ export function extractTables(wikitext: string): { text: string; tables: TableRe
 }
 
 /** Every cell of a table, for callers that only want its words. */
-export function tableText(table: { headers: Inline[][]; rows: Inline[][][] }): string[] {
+export function tableText(table: Pick<TableNode, 'headers' | 'rows'>): string[] {
   return [...table.headers, ...table.rows.flat()].map((cell) =>
-    cell.map((part) => (part.kind === 'run' ? part.text : part.label)).join(''),
+    cell.content.map((part) => (part.kind === 'run' ? part.text : part.label)).join(''),
   );
 }

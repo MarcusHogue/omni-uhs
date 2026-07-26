@@ -20,6 +20,7 @@ import type {
   ParseResult,
   SourceKind,
   SubjectNode,
+  TableCell,
   TableNode,
   TextNode,
 } from '../ast';
@@ -1142,6 +1143,8 @@ function pageToSubject(
               resolve,
               page.title,
               expanded,
+              images,
+              wikiBase,
             );
             if (node) hint.tables = [node];
           }
@@ -1159,6 +1162,8 @@ function pageToSubject(
         resolve,
         page.title,
         expanded,
+        images,
+        wikiBase,
       );
       if (node) target.children.push(node);
     }
@@ -1181,18 +1186,32 @@ function toTableNode(
   resolve?: Resolver,
   pageTitle = '',
   expanded: Record<string, string> = {},
+  withImages = false,
+  wikiBase = '',
 ): TableNode | null {
   // The same two steps `toBlocks` runs for prose, in the same order. Cells
   // bypass `toBlocks` entirely, and `toInline` has never stripped templates —
   // so without this every template in every cell reached the reader as source.
-  const cells = (row: string[]): Inline[][] =>
-    row.map((cell) => toInline(extractTemplates(cell, expanded).text, resolve, pageTitle));
-  const headers = cells(table.headers);
-  const rows = table.rows.map(cells);
-  const empty =
-    headers.every((cell) => cell.length === 0) &&
-    rows.every((row) => row.every((cell) => cell.length === 0));
-  if (empty) return null;
+  const cells = (row: string[], where: string): TableCell[] =>
+    row.map((raw, index) => {
+      const cell: TableCell = {
+        content: toInline(extractTemplates(raw, expanded).text, resolve, pageTitle),
+      };
+      if (!withImages) return cell;
+      // `findFileLinks` before the templates were stripped would find pictures
+      // inside an infobox that never renders; after is what the cell shows.
+      const pictures = findFileLinks(raw).map((ref, n) =>
+        toImageNode(ref, `${id}:${where}${index}:i${n}`, wikiBase),
+      );
+      if (pictures.length > 0) cell.images = pictures;
+      return cell;
+    });
+
+  const headers = cells(table.headers, 'h');
+  const rows = table.rows.map((row, r) => cells(row, `r${r}c`));
+  const isBlank = (cell: TableCell): boolean =>
+    cell.content.length === 0 && (cell.images?.length ?? 0) === 0;
+  if (headers.every(isBlank) && rows.every((row) => row.every(isBlank))) return null;
 
   return {
     id,
@@ -1249,8 +1268,7 @@ function pruneDeadLinks(roots: Node[]): void {
   // `pageIds`, so the target id it hands out points at a node that is not in
   // the tree, and tapping it silently falls back to the document root.
   const fixTable = (node: TableNode): void => {
-    node.headers = node.headers.map(fix);
-    node.rows = node.rows.map((row) => row.map(fix));
+    for (const cell of [...node.headers, ...node.rows.flat()]) cell.content = fix(cell.content);
   };
 
   const walkNode = (node: Node): void => {

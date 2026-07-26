@@ -1039,6 +1039,21 @@ code {
   white-space: nowrap;
 }
 
+/*
+ * An item icon in a cell. Capped rather than sized: the wiki asks for 72px but
+ * the stored picture is whatever `chooseImage` decided was worth keeping, and a
+ * full-width screenshot in a table cell would blow the column open.
+ */
+.cell-image {
+  display: block;
+  max-width: 72px;
+  max-height: 72px;
+  height: auto;
+  width: auto;
+  margin: 0 auto 4px;
+  border-radius: var(--radius-sm);
+}
+
 .image-frame {
   position: relative;
   display: inline-block;

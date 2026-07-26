@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { TableNode } from '../../src/parser/ast.js';
+import type { TableCell, TableNode } from '../../src/parser/ast.js';
 import { walk } from '../../src/parser/ast.js';
 import { deserializeDocument, serializeDocument } from '../../src/parser/serialize.js';
 import { parseWikiWalkthrough } from '../../src/parser/wikitext/index.js';
@@ -46,8 +46,8 @@ const tablesIn = (wikitext: string, title = 'Chrono Trigger/Inns'): TableNode[] 
   return [...walk(document.root)].filter((n): n is TableNode => n.type === 'table');
 };
 
-const plain = (cell: { kind: string; text?: string; label?: string }[]): string =>
-  cell.map((part) => (part.kind === 'run' ? part.text : part.label)).join('');
+const plain = (cell: TableCell): string =>
+  cell.content.map((part) => (part.kind === 'run' ? part.text : part.label)).join('');
 
 describe('extractTables', () => {
   it('reads header and rows, one cell per column', () => {
@@ -197,7 +197,7 @@ describe('tables in a parsed page', () => {
       OPTIONS,
     );
     const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
-    expect(table.rows[0]![0]![0]).toMatchObject({ kind: 'link', label: 'Iron Blade' });
+    expect(table.rows[0]![0]!.content[0]).toMatchObject({ kind: 'link', label: 'Iron Blade' });
   });
 
   it('puts the table in the section it was written in', () => {
@@ -282,6 +282,24 @@ After.`;
     const table = [...walk(back.root)].find((n): n is TableNode => n.type === 'table')!;
     expect(table.rows).toHaveLength(5);
     expect(plain(table.rows[4]![0]!)).toBe('Truce Inn');
+
+    // A cell's picture too — `JSON.stringify` turns a Uint8Array into `{}`, so
+    // a node the serializer does not know about comes back with no `data` and
+    // no way to tell it from one that never had any.
+    const withIcon = parseWikiWalkthrough(
+      [
+        {
+          title: 'Hollow Knight/Items',
+          wikitext: '{|\n|-\n| [[File:Quill.png|thumb]]Quill || 120\n|}',
+          revision: '1',
+        },
+      ],
+      { ...OPTIONS, kind: 'fandom', gameTitle: 'Hollow Knight', images: true },
+    ).document;
+    const cycled = deserializeDocument(JSON.parse(JSON.stringify(serializeDocument(withIcon))));
+    const icon = [...walk(cycled.root)].find((n) => n.type === 'image');
+    expect(icon).toMatchObject({ type: 'image' });
+    expect((icon as { data: Uint8Array }).data).toBeInstanceOf(Uint8Array);
   });
 
   it('keeps a table inside a spoiler behind the spoiler', () => {
@@ -304,7 +322,9 @@ After.`;
 
     const hints = [...walk(document.root)].flatMap((n) => (n.type === 'hints' ? n.hints : []));
     const hint = hints.find((h) => h.tables);
-    expect(hint?.tables?.[0]?.rows).toEqual([[[{ kind: 'run', text: '1' }], [{ kind: 'run', text: '2' }]]]);
+    expect(hint?.tables?.[0]?.rows).toEqual([
+      [{ content: [{ kind: 'run', text: '1' }] }, { content: [{ kind: 'run', text: '2' }] }],
+    ]);
     // Behind the reveal, not beside it: a table in a spoiler is the answer.
     expect([...walk(document.root)].filter((n) => n.type === 'table')).toHaveLength(1);
     const prose = [...walk(document.root)]
@@ -337,7 +357,7 @@ After.`;
       OPTIONS,
     );
     const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
-    expect(table.rows[0]![0]![0]).toEqual({ kind: 'run', text: 'Iron Blade' });
+    expect(table.rows[0]![0]!.content[0]).toEqual({ kind: 'run', text: 'Iron Blade' });
   });
 
   it('reads the templates in a cell instead of printing them', () => {
@@ -380,6 +400,38 @@ After.`;
     );
     const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
     expect(plain(table.rows[0]![1]!)).toBe('120');
+  });
+
+  it('keeps the icon in a cell, and lets walk() find it', () => {
+    // Hollow Knight files its items as a table with the picture in the first
+    // column. A cell that was only `Inline[]` had nowhere to put it, so the
+    // icon was dropped and the name stood alone. Verbatim from
+    // hollowknight.fandom.com "Map and Quill" (CC-BY-SA).
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Hollow Knight/Map and Quill',
+          wikitext:
+            '{|\n|-\n| <center>[[File:Quill.png|thumb|72x72px|center]]<br>\nQuill</center>\n| {{G|120}}\n|}',
+          revision: '1',
+        },
+      ],
+      { ...OPTIONS, kind: 'fandom', gameTitle: 'Hollow Knight', images: true },
+    );
+
+    const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
+    const cell = table.rows[0]![0]!;
+    expect(cell.images?.[0]?.source?.file).toBe('Quill.png');
+    // The name is still there beside it.
+    expect(plain(cell)).toContain('Quill');
+    // Reachable by walk(), which is what the download collects through and what
+    // the orphan sweep counts as "in use" — miss it and the sweep deletes it.
+    expect([...walk(document.root)].filter((n) => n.type === 'image')).toHaveLength(1);
+  });
+
+  it('records no cell pictures when images are off', () => {
+    const tables = tablesIn('{|\n|-\n| [[File:Quill.png|thumb]]Quill || 120\n|}');
+    expect(tables[0]!.rows[0]![0]!.images).toBeUndefined();
   });
 
   it('leaves a layout-only table out rather than emitting an empty one', () => {

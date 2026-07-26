@@ -143,14 +143,27 @@ export interface TextNode extends NodeBase {
  * Cells are `Inline[]` rather than strings so a link inside one stays a link:
  * these tables cross-reference the walkthrough constantly.
  */
+export interface TableCell {
+  content: Inline[];
+  /**
+   * Pictures in this cell.
+   *
+   * Hollow Knight files its items as a table with the icon in the first
+   * column — `[[File:Quill.png|72x72px]]<br>Quill` — and a cell that was only
+   * `Inline[]` had nowhere to put it, so the picture was dropped and the name
+   * stood alone. Third node type to carry images, after `hint` and `text`.
+   */
+  images?: ImageNode[];
+}
+
 export interface TableNode extends NodeBase {
   type: 'table';
   /** The table's caption, or the heading it sat under. */
   label: string;
   /** `!` cells. Empty when the table has no header row. */
-  headers: Inline[][];
+  headers: TableCell[];
   /** `rows[r][c]` is one cell. Ragged rows are kept as they came. */
-  rows: Inline[][][];
+  rows: TableCell[][];
 }
 
 export interface Hotspot {
@@ -251,6 +264,13 @@ export function* walk(node: Node): Generator<Node> {
     }
   } else if (node.type === 'text') {
     for (const image of node.images ?? []) yield* walk(image);
+  } else if (node.type === 'table') {
+    // Load-bearing well beyond rendering: the download collects image nodes by
+    // walking the finished tree, and the orphan sweep treats anything `walk`
+    // cannot reach as reclaimable. Miss this and the sweep deletes them.
+    for (const cell of [...node.headers, ...node.rows.flat()]) {
+      for (const image of cell.images ?? []) yield* walk(image);
+    }
   } else if (node.type === 'image') {
     for (const hotspot of node.hotspots ?? []) yield* walk(hotspot.target);
   }
