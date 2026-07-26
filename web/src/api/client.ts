@@ -80,7 +80,11 @@ export interface DiscoveryResult {
 export interface ImageRelease {
   name: string;
   reference: string;
+  /** `false` means a newer image exists; `null` means it could not be settled. */
+  current: boolean | null;
+  /** The published build's name, when the image declares one. */
   available: string | null;
+  running: string | null;
   error?: string;
 }
 
@@ -257,9 +261,17 @@ export const api = {
     return getJson<SearchResponse>(`/api/catalog/search?${params}`, signal);
   },
 
-  /** Whether the registry holds a newer image than the one running. */
-  release(signal?: AbortSignal): Promise<ReleaseStatus> {
-    return getJson<ReleaseStatus>('/api/release', signal);
+  /**
+   * Whether the registry holds a newer image than the one running.
+   *
+   * The web build is passed in because only the browser knows it — the version
+   * is compiled into this bundle, not into anything the container can read.
+   */
+  release(webVersion: string, signal?: AbortSignal): Promise<ReleaseStatus> {
+    return getJson<ReleaseStatus>(
+      `/api/release?web=${encodeURIComponent(webVersion)}`,
+      signal,
+    );
   },
 
   sources(signal?: AbortSignal): Promise<{ sources: SourceInfo[] }> {

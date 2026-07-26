@@ -38,6 +38,8 @@ describe('image references', () => {
   });
 });
 
+// The label only names the build; whether an update exists is settled by
+// comparing manifests, which needs no label at all. These cover the naming.
 describe('version from an image config', () => {
   it('reads the private build label', () => {
     expect(
@@ -79,6 +81,7 @@ describe('version from an image config', () => {
   });
 
   it('reports nothing rather than guessing', () => {
+    // An unnamed image is still compared correctly; only the label is missing.
     expect(versionFromConfig({})).toBeNull();
     expect(versionFromConfig({ config: { Env: ['APP_VERSION='] } })).toBeNull();
     expect(versionFromConfig({ config: { Labels: { 'com.omni-uhs.build': '  ' } } })).toBeNull();

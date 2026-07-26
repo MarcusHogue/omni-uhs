@@ -4,24 +4,31 @@
  * This is a different question from the one the update banner used to answer.
  * A service worker notices that the *browser* is behind the *server*; neither
  * side can notice that a build exists which nobody has pulled, because nothing
- * in the stack talks to the registry. So this does: it asks GHCR what
- * `:latest` currently is and reports the version baked into it.
+ * in the stack talks to the registry. So this does.
  *
- * How the version is read, since a registry has no "what version is this" API:
+ * A registry has no "what version is this" API, and the obvious substitute — a
+ * version label on the image — only works for images built after the label was
+ * added, which is a poor answer to "is my deployment current". So the question
+ * is asked a way that needs nothing published alongside the image and no
+ * cooperation from the build that made it:
  *
- *   1. `GET /token?scope=repository:<repo>:pull` — anonymous, for a public
- *      image. No credentials are stored or sent.
- *   2. `GET /v2/<repo>/manifests/latest` — an OCI *index*, listing one manifest
- *      per platform plus, on a buildx push, an `unknown/unknown` attestation
- *      entry that must not be mistaken for the image.
- *   3. `GET /v2/<repo>/manifests/<platform digest>` — names the config blob.
- *   4. `GET /v2/<repo>/blobs/<config digest>` — the image config, whose `Env`
- *      carries the `APP_VERSION` the publish workflow stamped in.
+ *   **`:latest` and `:<the tag I am running>` either name the same manifest or
+ *   they do not.**
  *
- * Four requests per image, behind a six-hour cache, and only when something
- * asks. The blob step redirects to a signed CDN URL on a second host, so both
- * are in the per-request allowlist and neither is added to the global one.
+ * Same manifest, same image, nothing to pull. Different, and there is. Two
+ * requests, no labels, and it works on every image already in the registry.
+ *
+ * The label is still read, because "a newer build is available" is friendlier
+ * when it can say *which* — but it names the answer, it does not decide it, and
+ * an image without one is compared just as well.
+ *
+ * All of it is anonymous, for public images, behind a six-hour cache, and only
+ * when something asks. Reading the label follows a redirect to a signed CDN URL
+ * on a second host, so both are in the per-request allowlist and neither is
+ * added to the global one.
  */
+
+import { createHash } from 'node:crypto';
 
 import { config } from './config.js';
 import type { Cache } from './cache/index.js';
@@ -36,8 +43,24 @@ export interface ImageRelease {
   /** Short label — "proxy", "web" — matching what the image serves. */
   name: string;
   reference: string;
-  /** `APP_VERSION` of the published `:latest`, or null if it could not be read. */
+  /**
+   * Whether `:latest` is the same image as the tag being run.
+   *
+   * The load-bearing field. `null` means the question could not be settled —
+   * the registry was unreachable, or the running build has no tag there — which
+   * is not the same as "up to date" and must never be shown as such.
+   */
+  current: boolean | null;
+  /**
+   * The build `:latest` was made from, when the image says so.
+   *
+   * Cosmetic: it names the build in the UI. Absent on images published before
+   * the version label existed, which is exactly why it cannot be what decides
+   * whether an update exists.
+   */
   available: string | null;
+  /** The version this deployment is running for this image. */
+  running: string | null;
   error?: string;
 }
 
@@ -88,13 +111,13 @@ interface OciConfig {
   config?: { Env?: string[]; Labels?: Record<string, string> };
 }
 
-const readJson = async <T>(
+const readRaw = async (
   cache: Cache,
   url: string,
   ttl: number,
   headers: Record<string, string>,
   key?: string,
-): Promise<T> => {
+): Promise<string> => {
   const entry = await cache.fetch({
     url,
     ttl,
@@ -107,8 +130,31 @@ const readJson = async <T>(
     headers,
     ...(key ? { key } : {}),
   });
-  return JSON.parse(await cache.readText(entry)) as T;
+  return cache.readText(entry);
 };
+
+const readJson = async <T>(
+  cache: Cache,
+  url: string,
+  ttl: number,
+  headers: Record<string, string>,
+  key?: string,
+): Promise<T> => JSON.parse(await readRaw(cache, url, ttl, headers, key)) as T;
+
+/**
+ * An image's identity, as a hash of its manifest.
+ *
+ * This is what makes the check work on images built before the version label
+ * existed — which, at the time of writing, is every image published. Two tags
+ * naming the same manifest are the same image; that is the whole comparison,
+ * and it needs nothing baked in, nothing published alongside, and no
+ * cooperation from the build.
+ *
+ * Hashed here rather than read from `Docker-Content-Digest` because the cache
+ * hands back bodies, not headers — and equality is all this is for, so it would
+ * hold even if the registry hashed differently.
+ */
+const digestOf = (raw: string): string => createHash('sha256').update(raw).digest('hex');
 
 /**
  * The platform image inside an index.
@@ -149,7 +195,19 @@ export function versionFromConfig(image: OciConfig): string | null {
   return value ? value : null;
 }
 
-async function publishedVersion(cache: Cache, image: ParsedImage): Promise<string | null> {
+/**
+ * Ask the registry about one image.
+ *
+ * Two questions, in order of importance: is `:latest` a different image from
+ * the one running, and if so what is it called. The first is answered by
+ * comparing manifests and always works; the second needs a label the image may
+ * not carry, so it is attempted and allowed to fail.
+ */
+async function inspect(
+  cache: Cache,
+  image: ParsedImage,
+  running: string | null,
+): Promise<{ current: boolean | null; available: string | null }> {
   const auth = await readJson<TokenPayload>(
     cache,
     `https://${GHCR}/token?scope=${encodeURIComponent(`repository:${image.repository}:pull`)}&service=${GHCR}`,
@@ -159,36 +217,56 @@ async function publishedVersion(cache: Cache, image: ParsedImage): Promise<strin
   );
   if (!auth.token) throw new Error('the registry issued no pull token');
   const headers = { authorization: `Bearer ${auth.token}` };
-
   const manifests = `https://${GHCR}/v2/${image.repository}/manifests`;
-  const index = await readJson<OciIndex>(cache, `${manifests}/latest`, config.ttl.release, headers);
 
-  // A single-platform push is a manifest already; a buildx push is an index.
-  const digest = platformDigest(index);
-  const manifest = digest
-    ? await readJson<OciIndex>(cache, `${manifests}/${digest}`, config.ttl.release, headers)
-    : index;
+  const latestRaw = await readRaw(cache, `${manifests}/latest`, config.ttl.release, headers);
 
-  const configDigest = manifest.config?.digest;
-  if (!configDigest) throw new Error('the manifest names no image config');
-
-  // Keyed on the digest, not the URL: the blob redirects to a signed CDN link
-  // that is unique per request, so caching by URL would never hit. A digest is
-  // content-addressed, so this entry can never go stale.
-  const blob = await readJson<OciConfig>(
-    cache,
-    `https://${GHCR}/v2/${image.repository}/blobs/${configDigest}`,
-    config.ttl.file,
-    headers,
-    `ghcr:config:${configDigest}`,
-  );
-  const version = versionFromConfig(blob);
-  if (!version) {
-    // Silence here would read as "you are up to date", which is the one thing
-    // this must never imply when it does not know.
-    throw new Error('the published image declares no version label');
+  // The comparison. A tag that is not there means the running build was never
+  // published under that name — reported as unknown, never as up to date.
+  let current: boolean | null = null;
+  if (running && running !== 'dev') {
+    try {
+      const runningRaw = await readRaw(
+        cache,
+        `${manifests}/${encodeURIComponent(running)}`,
+        config.ttl.release,
+        headers,
+      );
+      current = digestOf(latestRaw) === digestOf(runningRaw);
+    } catch {
+      current = null;
+    }
   }
-  return version;
+
+  // The name, when the image carries one. Best effort by design: an image
+  // published before the label existed still compares correctly above.
+  let available: string | null = null;
+  try {
+    const index = JSON.parse(latestRaw) as OciIndex;
+    // A single-platform push is a manifest already; a buildx push is an index.
+    const digest = platformDigest(index);
+    const manifest = digest
+      ? await readJson<OciIndex>(cache, `${manifests}/${digest}`, config.ttl.release, headers)
+      : index;
+    const configDigest = manifest.config?.digest;
+    if (configDigest) {
+      // Keyed on the digest, not the URL: the blob redirects to a signed CDN
+      // link that is unique per request, so caching by URL would never hit. A
+      // digest is content-addressed, so this entry can never go stale.
+      const blob = await readJson<OciConfig>(
+        cache,
+        `https://${GHCR}/v2/${image.repository}/blobs/${configDigest}`,
+        config.ttl.file,
+        headers,
+        `ghcr:config:${configDigest}`,
+      );
+      available = versionFromConfig(blob);
+    }
+  } catch {
+    /* the name is a nicety; the comparison above already stands */
+  }
+
+  return { current, available };
 }
 
 /**
@@ -197,7 +275,15 @@ async function publishedVersion(cache: Cache, image: ParsedImage): Promise<strin
  * Never throws: a registry that is unreachable is not news, and the caller has
  * a perfectly good answer already — the version it is running.
  */
-export async function checkRelease(cache: Cache): Promise<ReleaseStatus> {
+export async function checkRelease(
+  cache: Cache,
+  /**
+   * What the *browser* is running, which only the browser knows: the web
+   * image's version lives inside its JS bundle. Without it the web image can
+   * still be reported, but not compared.
+   */
+  webVersion?: string,
+): Promise<ReleaseStatus> {
   const running = config.version;
   const parsed = config.releaseImages
     .map((reference) => ({ reference, image: parseImage(reference) }))
@@ -213,32 +299,42 @@ export async function checkRelease(cache: Cache): Promise<ReleaseStatus> {
   const images = await Promise.all(
     parsed.map(async ({ image }): Promise<ImageRelease> => {
       const target = image!;
+      // Each image is compared against whatever is running *it*. They publish
+      // independently, so one can be behind while the other is current.
+      const runningHere =
+        target.name === 'web' ? (webVersion?.trim() || null) : running;
       try {
+        const { current, available } = await inspect(cache, target, runningHere);
         return {
           name: target.name,
           reference: target.reference,
-          available: await publishedVersion(cache, target),
+          current,
+          available,
+          running: runningHere,
         };
       } catch (error) {
         return {
           name: target.name,
           reference: target.reference,
+          current: null,
           available: null,
+          running: runningHere,
           error: (error as Error).message,
         };
       }
     }),
   );
 
-  const newer = images.filter((image) => image.available && image.available !== running);
+  const behind = images.filter((image) => image.current === false);
   log.upstream.info(
     {
       running,
+      state: Object.fromEntries(images.map((i) => [i.name, i.current])),
       available: Object.fromEntries(images.map((i) => [i.name, i.available])),
       ms: since(started),
     },
-    newer.length > 0
-      ? `a newer build is published: ${newer.map((i) => `${i.name} ${i.available}`).join(', ')}`
+    behind.length > 0
+      ? `a newer build is published for: ${behind.map((i) => i.name).join(', ')}`
       : `running the published build (${running})`,
   );
 

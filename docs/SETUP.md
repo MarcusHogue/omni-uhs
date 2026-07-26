@@ -334,12 +334,22 @@ Settings always shows every version it knows — this app, the proxy, and what i
 published for each image — whether or not the notice was dismissed. Dismissal is
 remembered per version, so the next release asks again.
 
-The registry check reads a `com.omni-uhs.build` label off the published image.
-It is deliberately not the standard `org.opencontainers.image.version`: labels
-are inherited from the base image, so the standard key on the web image returns
-Caddy's version rather than ours. Anonymous, public, and cached for six hours,
-so it is a handful of requests a day. `RELEASE_IMAGES=` (empty) switches it off;
-point it elsewhere if you publish your own fork.
+The registry check works by comparing manifests: `:latest` and the tag you are
+running either name the same image or they do not. That needs nothing published
+alongside the image and no cooperation from the build, so it works on every
+image already in the registry — including ones built before any of this existed.
+
+When the image also carries a `com.omni-uhs.build` label, the check uses it to
+*name* the new build ("Build 9f31c02 is available"); without one it just says a
+newer build exists. That label is deliberately not the standard
+`org.opencontainers.image.version`: labels are inherited from the base image, so
+the standard key on the web image returns Caddy's version rather than ours.
+
+An image that cannot be compared — the registry unreachable, or a running build
+with no tag there — is reported as *not compared*, never as up to date.
+Anonymous, public, and cached for six hours, so it is a handful of requests a
+day. `RELEASE_IMAGES=` (empty) switches it off; point it elsewhere if you
+publish your own fork.
 
 Images built by hand report `dev`, which switches the whole thing off rather
 than comparing versions that do not mean anything.

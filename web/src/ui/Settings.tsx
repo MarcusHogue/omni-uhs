@@ -337,12 +337,21 @@ export function Settings(): JSX.Element {
               {update.state.release?.images.map((image) => (
                 <Fragment key={image.name}>
                   <dt>Published {image.name}</dt>
-                  {/* A version is mono; a failure is a sentence, and `.mono`
-                      does not wrap, so it would run off the side. */}
-                  {image.available ? (
-                    <dd className="mono">{image.available}</dd>
+                  {/* The comparison is the answer; the version only names it,
+                      and images built before the label do not carry one. A
+                      failure is a sentence, and `.mono` does not wrap. */}
+                  {image.current === false ? (
+                    <dd>
+                      <span className="mono">{image.available ?? 'a newer build'}</span>{' '}
+                      <span className="muted">— newer than yours</span>
+                    </dd>
+                  ) : image.current === true ? (
+                    <dd className="muted">
+                      same image you are running
+                      {image.available && <span className="mono"> ({image.available})</span>}
+                    </dd>
                   ) : (
-                    <dd className="muted">{image.error ?? 'unknown'}</dd>
+                    <dd className="muted">{image.error ?? 'could not be compared'}</dd>
                   )}
                 </Fragment>
               ))}
@@ -375,7 +384,9 @@ export function Settings(): JSX.Element {
             {update.state.reason === 'registry-release' && (
               <div className="warnings-box">
                 <strong>
-                  A newer build has been published: {update.state.release?.version ?? 'unknown'}.
+                  {update.state.release?.version
+                    ? `A newer build has been published: ${update.state.release.version}.`
+                    : 'A newer build has been published.'}
                 </strong>
                 <p>
                   This one is not in the browser&rsquo;s hands — the images on the host are
@@ -392,9 +403,9 @@ export function Settings(): JSX.Element {
                   {(update.state.release?.unknown.length ?? 0) > 0 && (
                     <>
                       The {update.state.release!.unknown.join(' and ')} image
-                      {update.state.release!.unknown.length === 1 ? ' does' : 's do'} not report
-                      a version, so nothing was compared for{' '}
-                      {update.state.release!.unknown.length === 1 ? 'it' : 'them'}.{' '}
+                      {update.state.release!.unknown.length === 1 ? '' : 's'} could not be
+                      compared, so {update.state.release!.unknown.length === 1 ? 'it is' : 'they are'}{' '}
+                      not accounted for here.{' '}
                     </>
                   )}
                   On a Synology, Container Manager &rarr; Registry &rarr; pull{' '}

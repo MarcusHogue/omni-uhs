@@ -149,9 +149,14 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
    * every app launch costs nothing, and a container nobody opens makes no
    * requests at all.
    */
-  app.get('/api/release', async (_request, reply) =>
-    reply.header('cache-control', 'no-store').send(await checkRelease(getCache())),
-  );
+  app.get('/api/release', async (request, reply) => {
+    // The browser passes its own build: the web image's version is inside its
+    // bundle, so the server cannot know what is actually being served.
+    const { web } = request.query as { web?: string };
+    return reply
+      .header('cache-control', 'no-store')
+      .send(await checkRelease(getCache(), web));
+  });
 
   await app.register(uhsRoutes);
   await app.register(ifArchiveRoutes);

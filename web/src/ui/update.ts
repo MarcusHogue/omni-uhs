@@ -44,9 +44,9 @@ export interface ReleaseSummary {
   /** Images whose published build differs from what is running here. */
   behind: string[];
   /**
-   * Images the registry would not name a version for.
+   * Images the comparison could not settle.
    *
-   * Kept separate from `behind` and never folded into it. An unread image is
+   * Kept separate from `behind` and never folded into it. An unsettled image is
    * not a current one, and "only the proxy is behind" would be a claim about
    * the web image that nothing checked.
    */
@@ -149,29 +149,25 @@ export async function checkNow(): Promise<UpdateState> {
 /**
  * Ask the proxy what the registry is offering.
  *
- * The comparison happens here rather than on the server because only the
- * browser knows its own build: the proxy can compare its own version, but the
- * web bundle's lives in this file. So the server reports what is published and
- * each side checks itself.
+ * This bundle's own version goes with the request: the web image's build is
+ * compiled in here, not readable from the container, so the server cannot
+ * compare that image against `:latest` without being told what is running.
  */
 export async function refreshRelease(): Promise<void> {
   if (!isReleaseBuild(WEB_VERSION)) return;
   try {
-    const status = await api.release();
+    const status = await api.release(WEB_VERSION);
     if (!status.enabled) {
       state.release = null;
       derive();
       return;
     }
 
-    // Compare each image against whatever is actually running it. Averaging the
-    // two would hide the case this exists to show — one image published, the
-    // other not, which `fail-fast: false` makes a routine outcome.
-    const runningFor = (name: string): string =>
-      name === 'web' ? WEB_VERSION : (state.proxyVersion ?? status.running);
-
+    // Settled server-side, per image, by comparing manifests — the only
+    // comparison that works on an image carrying no version label. `null` means
+    // "could not tell", which is deliberately not treated as current.
     const behind = status.images
-      .filter((image) => image.available && image.available !== runningFor(image.name))
+      .filter((image) => image.current === false)
       .map((image) => image.name);
 
     const versions = new Set(
@@ -182,7 +178,7 @@ export async function refreshRelease(): Promise<void> {
       version: versions.size === 1 ? [...versions][0]! : null,
       images: status.images,
       behind,
-      unknown: status.images.filter((image) => !image.available).map((image) => image.name),
+      unknown: status.images.filter((image) => image.current === null).map((image) => image.name),
     };
     derive();
   } catch {
