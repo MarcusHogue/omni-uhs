@@ -2,9 +2,12 @@ import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 
 import { api, isOfflineError, type WikiSite } from '../api/client';
 import {
+  deleteImages,
+  findOrphanImages,
   getSetting,
   requestPersistence,
   setSetting,
+  sizeOfImages,
   storageEstimate,
 } from '../storage/db';
 import {
@@ -192,6 +195,7 @@ export function Settings(): JSX.Element {
             </button>
           </>
         )}
+        <UnusedImages onReclaimed={refreshFromStorage} />
       </section>
 
       <GameWikis />
@@ -481,6 +485,74 @@ export function Settings(): JSX.Element {
  * operator's standing decision, and an app should not be able to quietly undo
  * something somebody put in the environment on purpose.
  */
+/**
+ * Pictures on disk that nothing points at any more.
+ *
+ * A build before the re-download fix left a game's previous pictures behind
+ * every time it was downloaded again — at roughly 16 MB a time for a large
+ * game. New downloads cannot do that now, but the fix does not reclaim what is
+ * already there, so this does.
+ *
+ * Scanned on demand, never on mount: the answer needs every document's tree
+ * walked, and the Settings screen should not pay for that on the chance it has
+ * something to report.
+ */
+function UnusedImages({ onReclaimed }: { onReclaimed: () => Promise<void> }): JSX.Element {
+  const [state, setState] = useState<'idle' | 'scanning' | 'done' | 'clearing'>('idle');
+  const [found, setFound] = useState<{ keys: string[]; bytes: number } | null>(null);
+
+  const scan = async (): Promise<void> => {
+    setState('scanning');
+    const keys = await findOrphanImages();
+    setFound({ keys, bytes: await sizeOfImages(keys) });
+    setState('done');
+  };
+
+  const reclaim = async (): Promise<void> => {
+    if (!found) return;
+    setState('clearing');
+    await deleteImages(found.keys);
+    setFound({ keys: [], bytes: 0 });
+    await onReclaimed();
+    setState('done');
+  };
+
+  return (
+    <>
+      <h3>Unused images</h3>
+      <p className="muted">
+        Pictures left behind by an earlier version when a wiki game was downloaded a second
+        time. Nothing in your library points at them.
+      </p>
+      {state === 'idle' && (
+        <button type="button" onClick={() => void scan()}>
+          Check for unused images
+        </button>
+      )}
+      {state === 'scanning' && <p className="muted">Checking…</p>}
+      {(state === 'done' || state === 'clearing') && found && (
+        <>
+          {found.keys.length === 0 ? (
+            <p className="muted">Nothing to reclaim — every stored image is in use.</p>
+          ) : (
+            <>
+              <p>
+                <strong>
+                  {found.keys.length} unused image{found.keys.length === 1 ? '' : 's'}
+                </strong>{' '}
+                — {formatBytes(found.bytes)}.
+              </p>
+              <button type="button" disabled={state === 'clearing'} onClick={() => void reclaim()}>
+                {state === 'clearing' ? 'Deleting…' : `Delete them and reclaim ${formatBytes(found.bytes)}`}
+              </button>
+            </>
+          )}
+        </>
+      )}
+    </>
+  );
+}
+
 /**
  * Whether to bring wiki pictures down with a game, and how much of them.
  *

@@ -12,6 +12,7 @@
 import { type DBSchema, type IDBPDatabase, openDB } from 'idb';
 
 import type { HintDocument, SourceKind } from '../parser/ast';
+import { walk } from '../parser/ast';
 
 export interface StoredDocument {
   id: string;
@@ -197,6 +198,51 @@ export async function getImage(key: string): Promise<StoredImage | undefined> {
 /** Every picture belonging to a document — for export, and for sizing. */
 export async function listImages(documentId: string): Promise<StoredImage[]> {
   return (await getDb()).getAllFromIndex('images', 'by-document', documentId);
+}
+
+/**
+ * Stored pictures that no document refers to any more.
+ *
+ * A fresh download cannot produce one: the nodes handed to the fetcher are
+ * walked out of the finished tree, so every row written has something pointing
+ * at it. Re-downloading used to, though — a wiki's document id is stable, and
+ * `putDocument` upserted the new pictures while leaving the old set behind.
+ * That is fixed above, but the fix only stops *new* orphans; the ones an
+ * earlier build already wrote are still on disk, and at ~16 MB per re-download
+ * of a large game they are worth reclaiming.
+ *
+ * Keys, not records. `getAll` would read every stored picture into memory to
+ * answer a question about names, which is the exact cost the separate store
+ * exists to avoid.
+ */
+export async function findOrphanImages(): Promise<string[]> {
+  const db = await getDb();
+  const stored = (await db.getAllKeys('images')).map(String);
+  if (stored.length === 0) return [];
+
+  const referenced = new Set<string>();
+  for (const document of await db.getAll('documents')) {
+    for (const node of walk(document.document.root)) {
+      if (node.type === 'image' && node.blobKey) referenced.add(node.blobKey);
+    }
+  }
+  return stored.filter((key) => !referenced.has(key));
+}
+
+/** What those orphans cost, so the offer to delete them can name a number. */
+export async function sizeOfImages(keys: string[]): Promise<number> {
+  const db = await getDb();
+  let bytes = 0;
+  for (const key of keys) bytes += (await db.get('images', key))?.bytes.length ?? 0;
+  return bytes;
+}
+
+export async function deleteImages(keys: string[]): Promise<void> {
+  if (keys.length === 0) return;
+  const db = await getDb();
+  const tx = db.transaction('images', 'readwrite');
+  for (const key of keys) await tx.store.delete(key);
+  await tx.done;
 }
 
 export async function getBlob(id: string): Promise<StoredBlob | undefined> {
