@@ -29,6 +29,77 @@
 import { normalizePageTitle, orderedLinks } from './index';
 import { splitParams } from './images';
 
+export interface TocSection {
+  /** `Walkthrough`, `Appendices`, `Gameplay`, … as the wiki names them. */
+  title: string;
+  /** Page titles, in the order the Table of Contents lists them. */
+  pages: string[];
+}
+
+/**
+ * A game's Table of Contents, which is the authoritative index.
+ *
+ * This page was being *discarded* as "noise that duplicates the tree we build".
+ * It is the opposite. `Chrono Trigger/Table of Contents` is a hand-curated map
+ * of the whole guide: twenty-eight walkthrough chapters in play order under
+ * `{{h2|[[…|Walkthrough]]|1}}`, eleven appendices under a literal
+ * `{{h2|Appendices}}`, and further sections for Gameplay, Enemies, Statistics
+ * and the DS extras. Portal's is structurally identical, down to the templates.
+ *
+ * That beats the `{{Footer Nav}}` chain on every count — one page instead of a
+ * traversal, and section names the chain cannot supply — so the chain becomes
+ * the fallback for games that have no such page.
+ *
+ * Two things make this more than a link scan, and both were load-bearing
+ * failures before they were handled:
+ *
+ * - The chapter list lives inside `{{listcol|list=# [[…]] …}}`, which is
+ *   multi-line with no recognised body parameter, so the ordinary link scan
+ *   deleted every chapter. Hence `raw`.
+ * - Headings are `{{h2|…}}`, not `== … ==`.
+ *
+ * Links outside any heading — the lead, a stray `{{Featured}}` — are collected
+ * under `''`, which the caller renders without a group rather than inventing a
+ * name for.
+ */
+export function parseTableOfContents(wikitext: string, game: string): TocSection[] {
+  const sections: TocSection[] = [];
+  const byTitle = new Map<string, TocSection>();
+  const prefix = `${normalizePageTitle(game)}`;
+
+  for (const link of orderedLinks(wikitext, { raw: true, pageTitle: `${game}/` })) {
+    // A guide's own pages only. A ToC links out to the wiki's front matter and
+    // to other games, and following those would download half the wiki.
+    if (link.title !== prefix && !link.title.startsWith(`${prefix}/`) && !isCompanion(link.title, prefix)) {
+      continue;
+    }
+    // The ToC lists itself; including it would nest the index inside the game.
+    if (/\/Table of Contents$/i.test(link.title)) continue;
+
+    let section = byTitle.get(link.section);
+    if (!section) {
+      section = { title: link.section, pages: [] };
+      byTitle.set(link.section, section);
+      sections.push(section);
+    }
+    section.pages.push(link.title);
+  }
+
+  return sections.filter((section) => section.pages.length > 0);
+}
+
+/**
+ * An expansion filed under the base game.
+ *
+ * Portal's Table of Contents lists `Portal: Still Alive/Challenge Map 1` and
+ * thirteen more beside it, under a `{{subtoc}}`. Those are part of the guide by
+ * the wiki's own account, and `list=allpages&apprefix=Portal/` cannot see a one
+ * of them — so a prefix-only download silently dropped a whole expansion.
+ */
+function isCompanion(title: string, prefix: string): boolean {
+  return title.startsWith(`${prefix}:`) || title.startsWith(`${prefix} `);
+}
+
 /** `{{Footer Nav|game=Chrono Trigger|prevpage=…|nextpage=…}}`. */
 const FOOTER_NAV = /\{\{\s*footer[ _]nav\s*[|}]/i;
 

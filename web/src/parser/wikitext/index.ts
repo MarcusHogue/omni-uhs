@@ -98,6 +98,19 @@ export interface WikiWalkthroughOptions {
    * See `collectExpandable`, which says which calls are worth asking about.
    */
   expanded?: Record<string, string>;
+  /**
+   * Named groups of pages, in the order they should appear.
+   *
+   * StrategyWiki's Table of Contents does not just order a game, it *shapes*
+   * one: Walkthrough, Appendices, Gameplay, Enemies, Statistics. Given those,
+   * the document opens on five landmarks instead of a forty-five-row scroll,
+   * and "include the appendices" becomes a labelled section rather than a run
+   * of pages trailing the walkthrough.
+   *
+   * Pages not named by any group follow them, ungrouped. Absent, every page is
+   * a child of the document root exactly as before.
+   */
+  groups?: { title: string; pages: string[] }[];
 }
 
 /** Templates whose content is a spoiler and must start hidden. */
@@ -499,12 +512,36 @@ export interface OrderedLink {
   section: string;
 }
 
-export function orderedLinks(wikitext: string): OrderedLink[] {
+export interface OrderedLinkOptions {
+  /**
+   * Read the links inside templates too, and take headings from `{{h2|…}}`.
+   *
+   * Off by default, because on an ordinary page a template is a navigation box
+   * whose links are not that page's ordering. On a Table of Contents the
+   * opposite is true: the templates *are* the ordering. StrategyWiki wraps the
+   * whole numbered chapter list in `{{listcol|list=# [[…]] …}}`, which is
+   * multi-line and has no recognised body parameter, so stripping it deleted
+   * all twenty-eight chapters of Chrono Trigger in one go.
+   */
+  raw?: boolean;
+  /** Resolve `[[../Sibling]]` against this page. */
+  pageTitle?: string;
+}
+
+/** `{{h2|Appendices}}` and `{{h2|[[Portal/Gameplay|Gameplay]]}}`. */
+const TEMPLATE_HEADING = /^\s*\{\{\s*h([1-6])\s*\|/i;
+
+export function orderedLinks(
+  wikitext: string,
+  options: OrderedLinkOptions = {},
+): OrderedLink[] {
   const found: OrderedLink[] = [];
   const seen = new Set<string>();
-  // Templates first: a navigation box expands to links that are not the page's
-  // own ordering, and file links are pictures rather than chapters.
-  const text = stripFileLinks(stripBlockMarkup(wikitext));
+  const text = options.raw
+    ? stripFileLinks(wikitext)
+    : // Templates first: a navigation box expands to links that are not the
+      // page's own ordering, and file links are pictures rather than chapters.
+      stripFileLinks(stripBlockMarkup(wikitext));
 
   let section = '';
   for (const line of text.split('\n')) {
@@ -513,11 +550,21 @@ export function orderedLinks(wikitext: string): OrderedLink[] {
       section = stripMarkup(heading[2]!);
       continue;
     }
+    // A heading written as a template. Its parameter is sometimes a bare string
+    // and sometimes a link — `{{h2|[[Portal/Gameplay|Gameplay]]}}` — in which
+    // case the label names the section *and* the target is one of its pages, so
+    // the line still falls through to the link scan below.
+    if (options.raw && TEMPLATE_HEADING.test(line)) {
+      const inner = line.trim().replace(/^\{\{/, '').replace(/\}\}\s*$/, '');
+      const label = stripMarkup(splitParams(inner)[1] ?? '');
+      if (label) section = label;
+    }
+
     for (const match of line.matchAll(WIKILINK)) {
       const target = match[1]!;
       // `[[:Category:X]]` and interwiki links are filing, not chapters.
       if (target.startsWith(':') || /^[a-z-]{2,12}:/.test(target)) continue;
-      const title = normalizePageTitle(target);
+      const title = normalizePageTitle(resolveRelative(target, options.pageTitle ?? ''));
       if (!title || seen.has(title)) continue;
       seen.add(title);
       found.push({ title, section });
@@ -1211,6 +1258,59 @@ function guidanceIndex(children: Node[], rankOf: Map<string, number>): SubjectNo
   };
 }
 
+/**
+ * Wrap the page subjects in the groups the source named.
+ *
+ * Order comes entirely from the groups: they are the wiki's own reading order,
+ * and the order pages were *fetched* in means nothing next to that. Anything a
+ * group did not claim keeps its fetch order and follows, so a page can never be
+ * lost by being left out of an index.
+ *
+ * A group of one is left unwrapped only when the page and the group share a
+ * name — otherwise the wrapper is what carries the section, and collapsing it
+ * would silently lose "Appendices".
+ */
+function groupChildren(
+  children: Node[],
+  subjects: Map<string, SubjectNode>,
+  groups: { title: string; pages: string[] }[],
+): Node[] {
+  const out: Node[] = [];
+  const claimed = new Set<Node>();
+  let counter = 0;
+
+  for (const group of groups) {
+    const members: Node[] = [];
+    for (const title of group.pages) {
+      const subject = subjects.get(normalizePageTitle(title));
+      if (!subject || claimed.has(subject)) continue;
+      claimed.add(subject);
+      members.push(subject);
+    }
+    if (members.length === 0) continue;
+
+    // An unnamed group is the index's lead — links before any heading. Those
+    // pages belong at the top level, not under a heading with no name.
+    if (!group.title) {
+      out.push(...members);
+      continue;
+    }
+    if (members.length === 1 && members[0]!.label === group.title) {
+      out.push(members[0]!);
+      continue;
+    }
+    out.push({
+      id: `p:g${counter++}`,
+      type: 'subject',
+      label: group.title,
+      children: members,
+    });
+  }
+
+  out.push(...children.filter((child) => !claimed.has(child)));
+  return out;
+}
+
 export function parseWikiWalkthrough(
   pages: WikiPageInput[],
   options: WikiWalkthroughOptions,
@@ -1240,6 +1340,9 @@ export function parseWikiWalkthrough(
   const images = options.images ?? false;
   const expanded = options.expanded ?? {};
 
+  /** Page subjects by normalised title, so the groups can pick them up. */
+  const subjects = new Map<string, SubjectNode>();
+
   kept.forEach((page, index) => {
     const subject = pageToSubject(
       page,
@@ -1252,8 +1355,10 @@ export function parseWikiWalkthrough(
       options.baseUrl,
       expanded,
     );
-    if (subject.children.length > 0) children.push(subject);
-    else if (rank) {
+    if (subject.children.length > 0) {
+      children.push(subject);
+      subjects.set(normalizePageTitle(page.title), subject);
+    } else if (rank) {
       // Everything on it was a gallery, a table, or a references list. Worth
       // saying: "why is that page not here" is a fair question, and silence
       // makes it look like the download failed.
@@ -1268,6 +1373,8 @@ export function parseWikiWalkthrough(
 
   if (children.length === 0) warnings.push('No readable content found on these pages.');
 
+  const grouped = options.groups ? groupChildren(children, subjects, options.groups) : children;
+
   const first = pages[0];
   const pageUrl =
     options.documentUrl ??
@@ -1275,15 +1382,15 @@ export function parseWikiWalkthrough(
   const revision = first?.revision ?? null;
 
   if (rank) {
-    orderByGuidance(children, rankOf);
-    const index = guidanceIndex(children, rankOf);
-    if (index) children.unshift(index);
+    orderByGuidance(grouped, rankOf);
+    const index = guidanceIndex(grouped, rankOf);
+    if (index) grouped.unshift(index);
   }
 
   const root: SubjectNode =
-    children.length === 1 && children[0]!.type === 'subject'
-      ? (children[0] as SubjectNode)
-      : { id: 'p:root', type: 'subject', label: options.gameTitle, children };
+    grouped.length === 1 && grouped[0]!.type === 'subject'
+      ? (grouped[0] as SubjectNode)
+      : { id: 'p:root', type: 'subject', label: options.gameTitle, children: grouped };
   root.label = options.gameTitle;
 
   const document: HintDocument = {

@@ -15,7 +15,7 @@ import { walk } from '../parser/ast';
 import { parseInvisiclues } from '../parser/invisiclues';
 import { parseUhs } from '../parser/uhs';
 import { collectExpandable, parseWikiWalkthrough } from '../parser/wikitext';
-import { orderWalkthrough } from '../parser/wikitext/strategywiki';
+import { orderWalkthrough, parseTableOfContents } from '../parser/wikitext/strategywiki';
 import { putDocument, type StoredDocument, type StoredImage } from './db';
 import { expandTemplates } from './expand';
 import { fetchImages } from './images';
@@ -217,18 +217,20 @@ interface WikiAllPagesResponse {
 }
 
 /**
- * StrategyWiki: one game, in the order the game says to read it.
+ * StrategyWiki: one game, shaped and ordered the way the wiki shapes it.
  *
  * The other wikis are reference works and the download sorts them
  * alphabetically, which loses nothing. A walkthrough is the opposite case —
  * order *is* the content — and this used to sort it alphabetically too, so
  * Chrono Trigger opened on "Beyond the Ruins" and closed on "The Millennial
- * Fair": the penultimate chapter first and the opening one last. `orderWalkthrough`
- * recovers the real sequence from the `{{Footer Nav}}` chain the pages already
- * carry, at no extra request.
+ * Fair": the penultimate chapter first and the opening one last.
  *
- * Everything else here is the treatment Fandom and wiki.gg already got and this
- * source never did: batched page fetches, template expansion, and pictures.
+ * The order comes from the game's Table of Contents, which this used to throw
+ * away as noise. It is a hand-curated map of the whole guide — twenty-eight
+ * chapters in play order, then Appendices, Gameplay, Enemies, Statistics — and
+ * those section names become the document's own shape. Failing that, the
+ * `{{Footer Nav}}` chain the chapters carry; failing that, alphabetical with a
+ * note saying so.
  */
 async function downloadStrategyWiki(
   entry: CatalogEntry,
@@ -236,28 +238,48 @@ async function downloadStrategyWiki(
 ): Promise<DownloadResult> {
   // A game is a tree of sub-pages, and any of them identifies the game.
   const gameTitle = entry.ref.split('/')[0]!;
-  const index = await api.strategyWiki<WikiAllPagesResponse>(
-    {
-      action: 'query',
-      list: 'allpages',
-      apprefix: `${gameTitle}/`,
-      aplimit: '200',
-      apnamespace: '0',
-    },
-    options.signal,
-  );
 
-  const titles = [gameTitle, ...(index.query?.allpages ?? []).map((p) => p.title ?? '')]
-    .filter(Boolean)
-    // Skip the noise: table-of-contents pages duplicate the tree we build.
-    .filter((title) => !/\/(Table[ _]of[ _]Contents)$/i.test(title));
+  // Not caught: a missing Table of Contents comes back as an empty list from
+  // `fetchPages`, so anything that throws here is a real network failure and
+  // swallowing it would turn an aborted download into a silently worse one.
+  const signalOnly: DownloadOptions = options.signal ? { signal: options.signal } : {};
+  const [toc, index] = await Promise.all([
+    fetchPages(strategyWikiTransport, [`${gameTitle}/Table of Contents`], signalOnly),
+    api.strategyWiki<WikiAllPagesResponse>(
+      {
+        action: 'query',
+        list: 'allpages',
+        apprefix: `${gameTitle}/`,
+        aplimit: '200',
+        apnamespace: '0',
+      },
+      options.signal,
+    ),
+  ]);
+
+  // The index still runs, even with a Table of Contents in hand. It is the only
+  // check on the ToC being complete, and a page missing from both would be lost
+  // with nothing to say it ever existed.
+  const listed = (index.query?.allpages ?? []).map((page) => page.title ?? '').filter(Boolean);
+  const sections = toc[0] ? parseTableOfContents(toc[0].wikitext, gameTitle) : [];
+
+  // Fetched by title rather than by prefix: Portal's Table of Contents lists
+  // fourteen `Portal: Still Alive/…` pages that `apprefix=Portal/` cannot see,
+  // and a prefix-only download dropped the whole expansion without a word.
+  const wanted = new Set<string>([gameTitle, ...sections.flatMap((s) => s.pages), ...listed]);
+  const titles = [...wanted].filter(
+    // The index page itself would nest a copy of the contents inside the game.
+    (title) => title && !/\/(Table[ _]of[ _]Contents)$/i.test(title),
+  );
 
   const fetched = await fetchPages(strategyWikiTransport, titles, options);
   if (fetched.length === 0) throw new Error(`No StrategyWiki pages found for "${gameTitle}".`);
 
   // Reading order, before anything else looks at the pages: the parser numbers
-  // sections in the order it receives them.
-  const { ordered, notes } = orderWalkthrough(fetched, gameTitle);
+  // sections in the order it receives them. With a Table of Contents the groups
+  // carry the order, so the page list only has to be complete.
+  const { ordered, notes } =
+    sections.length > 0 ? { ordered: fetched, notes: [] } : orderWalkthrough(fetched, gameTitle);
 
   const policy = await imageSettings();
   const calls = new Set<string>();
@@ -277,6 +299,7 @@ async function downloadStrategyWiki(
     reveal: 'as-written',
     images: policy.enabled,
     expanded: templates.expanded,
+    ...(sections.length > 0 ? { groups: sections } : {}),
   });
   result.warnings.push(...notes, ...templates.warnings);
 

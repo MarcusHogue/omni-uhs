@@ -10,7 +10,13 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { footerNext, orderWalkthrough } from '../../src/parser/wikitext/strategywiki.js';
+import { walk } from '../../src/parser/ast.js';
+import { parseWikiWalkthrough } from '../../src/parser/wikitext/index.js';
+import {
+  footerNext,
+  orderWalkthrough,
+  parseTableOfContents,
+} from '../../src/parser/wikitext/strategywiki.js';
 
 const GAME = 'Chrono Trigger';
 
@@ -144,5 +150,158 @@ describe('orderWalkthrough', () => {
     const { ordered, notes } = orderWalkthrough(pages, 'Quest');
     expect(ordered.map((p) => p.title)).toEqual(['Quest/Areas', 'Quest/Bosses']);
     expect(notes[0]).toMatch(/alphabetical order/);
+  });
+});
+
+/**
+ * The real `Chrono Trigger/Table of Contents`, trimmed to four chapters and
+ * three appendices (strategywiki.org, CC-BY-SA-4.0). Everything structural is
+ * kept verbatim: the `{{col}}` layout, `{{h2|…}}` headings both bare and
+ * linked, and the `{{listcol|list=…}}` wrapper around the numbered chapters.
+ */
+const CONTENTS = `<noinclude>{{Header Nav|game=Chrono Trigger}}</noinclude>
+{{col|4|begin}}
+{{h2|[[Chrono Trigger/Gameplay|Gameplay]]}}
+* [[Chrono Trigger/Controls|Controls]]
+* [[Chrono Trigger/Characters|Characters]]
+[[File:Chrono Trigger logo.png|200px|Chrono Trigger logo]]
+{{col|4}}
+{{h2|Appendices}}
+* [[Chrono Trigger/Chronology|Chronology]]
+* [[Chrono Trigger/Inns|Inns]]
+* [[Chrono Trigger/Maps|Maps]]
+{{col|4|end}}
+{{h2|[[Chrono Trigger/Walkthrough|Walkthrough]]|1}}
+{{listcol|list=
+# [[Chrono Trigger/The Millennial Fair|The Millennial Fair]] (1000 A.D. first time)
+# [[Chrono Trigger/The Queen Returns|The Queen Returns]] (600 A.D. first time)
+# [[Chrono Trigger/Beyond the Ruins|Beyond the Ruins]] (2300 A.D. first time)
+# [[Chrono Trigger/Endings|Endings]]
+}}`;
+
+describe('parseTableOfContents', () => {
+  it('reads the whole guide, in the order and the sections the wiki gives', () => {
+    expect(parseTableOfContents(CONTENTS, GAME)).toEqual([
+      {
+        title: 'Gameplay',
+        pages: ['Chrono Trigger/Gameplay', 'Chrono Trigger/Controls', 'Chrono Trigger/Characters'],
+      },
+      {
+        title: 'Appendices',
+        pages: ['Chrono Trigger/Chronology', 'Chrono Trigger/Inns', 'Chrono Trigger/Maps'],
+      },
+      {
+        title: 'Walkthrough',
+        pages: [
+          'Chrono Trigger/Walkthrough',
+          'Chrono Trigger/The Millennial Fair',
+          'Chrono Trigger/The Queen Returns',
+          'Chrono Trigger/Beyond the Ruins',
+          'Chrono Trigger/Endings',
+        ],
+      },
+    ]);
+  });
+
+  it('keeps the chapters that live inside {{listcol}}', () => {
+    // The failure this guards is total and silent. `{{listcol|list=…}}` is
+    // multi-line with no recognised body parameter, so the ordinary link scan
+    // strips it — and with it every chapter of the walkthrough, leaving a
+    // Table of Contents that appears to list only the appendices.
+    const walkthrough = parseTableOfContents(CONTENTS, GAME).find(
+      (section) => section.title === 'Walkthrough',
+    );
+    expect(walkthrough?.pages).toContain('Chrono Trigger/The Millennial Fair');
+    expect(walkthrough?.pages).toHaveLength(5);
+  });
+
+  it('takes a heading whose parameter is itself a link', () => {
+    // `{{h2|[[Portal/Gameplay|Gameplay]]}}` names the section *and* names one of
+    // its pages, so the label and the target both have to be read.
+    const [gameplay] = parseTableOfContents(CONTENTS, GAME);
+    expect(gameplay?.title).toBe('Gameplay');
+    expect(gameplay?.pages[0]).toBe('Chrono Trigger/Gameplay');
+  });
+
+  it('leaves out pictures, itself, and pages belonging to other games', () => {
+    const pages = parseTableOfContents(
+      `${CONTENTS}\n* [[Chrono Cross]]\n* [[Chrono Trigger/Table of Contents|ToC]]`,
+      GAME,
+    ).flatMap((section) => section.pages);
+    expect(pages).not.toContain('Chrono Cross');
+    expect(pages.some((page) => page.includes('Table of Contents'))).toBe(false);
+    expect(pages.some((page) => page.includes('.png'))).toBe(false);
+  });
+
+  it('follows a companion guide filed under the base game', () => {
+    // Portal's contents lists fourteen `Portal: Still Alive/…` pages, and
+    // `list=allpages&apprefix=Portal/` cannot see one of them.
+    const sections = parseTableOfContents(
+      '{{h2|Challenge Maps}}\n# [[Portal: Still Alive/Challenge Map 1|Map 1]]',
+      'Portal',
+    );
+    expect(sections[0]?.pages).toEqual(['Portal: Still Alive/Challenge Map 1']);
+  });
+
+  it('says nothing about a page that is not an index', () => {
+    expect(parseTableOfContents('Just prose about the game.', GAME)).toEqual([]);
+  });
+});
+
+describe('a game grouped by its Table of Contents', () => {
+  const pages = [
+    'Chrono Trigger/Walkthrough',
+    'Chrono Trigger/The Millennial Fair',
+    'Chrono Trigger/Beyond the Ruins',
+    'Chrono Trigger/Inns',
+    'Chrono Trigger/Controls',
+    'Chrono Trigger/Bestiary',
+  ].map((title) => ({ title, wikitext: `Prose for ${title}.`, revision: '1' }));
+
+  const parsed = (): ReturnType<typeof parseWikiWalkthrough> =>
+    parseWikiWalkthrough(pages, {
+      kind: 'strategywiki',
+      gameTitle: GAME,
+      baseUrl: 'https://strategywiki.org/wiki/',
+      license: 'CC-BY-SA-4.0',
+      personalUseOnly: false,
+      fetchedAt: '2026-01-01T00:00:00.000Z',
+      reveal: 'as-written',
+      groups: parseTableOfContents(CONTENTS, GAME),
+    });
+
+  it('opens on the sections rather than a flat scroll of pages', () => {
+    const top = parsed().document.root.children;
+    expect(top.map((node) => node.label)).toEqual([
+      'Gameplay',
+      'Appendices',
+      'Walkthrough',
+      // Listed by neither the index nor a group: kept, and last, because a page
+      // must never be lost by being left out of an index.
+      'Bestiary',
+    ]);
+  });
+
+  it('puts the walkthrough chapters in play order under Walkthrough', () => {
+    // Handed over alphabetically, which is what `list=allpages` returns:
+    // "Beyond the Ruins" — the later chapter — comes first in the input.
+    const top = parsed().document.root.children;
+    const walkthrough = top.find((node) => node.label === 'Walkthrough');
+    expect(walkthrough?.type === 'subject' && walkthrough.children.map((c) => c.label)).toEqual([
+      'Walkthrough',
+      'The Millennial Fair',
+      'Beyond the Ruins',
+    ]);
+  });
+
+  it('keeps every page exactly once', () => {
+    // By id, not by label: a group can legitimately share a name with a page
+    // inside it. StrategyWiki's index writes `{{h2|[[…|Walkthrough]]}}`, so the
+    // Walkthrough section and the Walkthrough intro page are both "Walkthrough"
+    // — which is how the wiki renders it too.
+    const ids = [...walk(parsed().document.root)]
+      .filter((node) => node.type === 'subject' && /^p:\d+$/.test(node.id ?? ''))
+      .map((node) => node.id);
+    expect(new Set(ids).size).toBe(pages.length);
   });
 });
