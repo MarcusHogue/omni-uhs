@@ -991,6 +991,7 @@ code {
 }
 
 .textnode h2,
+.tablenode h2,
 .imagenode h2 {
   font-size: calc(var(--size-read) + 2px);
   margin: 6px 0 12px;
@@ -999,6 +1000,43 @@ code {
 .textnode .runs {
   font-size: var(--size-read);
   line-height: 1.6;
+}
+
+/*
+ * A wiki table.
+ *
+ * The scroll lives on the wrapper, not the table, so a wide one — Chrono
+ * Trigger's equipment list is eight columns — scrolls inside itself. Without
+ * that the page body scrolls sideways and drags every other row out of
+ * alignment with it.
+ */
+.table-scroll {
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  max-width: 100%;
+}
+
+.tablenode table {
+  border-collapse: collapse;
+  font-size: calc(var(--size-read) - 1px);
+  line-height: 1.45;
+}
+
+.tablenode th,
+.tablenode td {
+  border: 1px solid var(--line);
+  padding: 6px 10px;
+  text-align: left;
+  vertical-align: top;
+  /* Long prose cells wrap; short ones stay on one line rather than breaking
+     "1000 A.D." across two. */
+  min-width: 4em;
+}
+
+.tablenode th {
+  background: var(--surface-2);
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 .image-frame {

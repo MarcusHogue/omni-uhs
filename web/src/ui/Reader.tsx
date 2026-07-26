@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
-import type { HintGroupNode, ImageNode, Inline, Node, TextNode } from '../parser/ast';
+import type { HintGroupNode, ImageNode, Inline, Node, TableNode, TextNode } from '../parser/ast';
 import type { WikiTransport } from '../api/client';
 import { strategyWikiTransport, wikiTransport } from '../api/client';
 import {
@@ -237,6 +237,8 @@ function NodeView(props: ViewProps): JSX.Element {
           {...(props.wiki ? { wiki: props.wiki } : {})}
         />
       );
+    case 'table':
+      return <TableView node={node} onNavigate={props.onNavigate} />;
     case 'image':
       return <ImageView node={node} onNavigate={props.onNavigate} />;
     case 'link':
@@ -334,6 +336,7 @@ function TypeMark({ type }: { type: Node['type'] }): JSX.Element {
     subject: '▸',
     hints: '?',
     text: '≡',
+    table: '▦',
     image: '▣',
     link: '→',
   };
@@ -426,6 +429,54 @@ function HintsView({
           )}
         </p>
       )}
+    </div>
+  );
+}
+
+/**
+ * A wiki table.
+ *
+ * The scroll container is the whole point on a phone: `Chrono Trigger/Equipment
+ * and items` is eight columns wide and will not fit, and the failure mode
+ * without it is the *page* scrolling sideways — every other row dragged out of
+ * alignment by one table.
+ */
+function TableView({
+  node,
+  onNavigate,
+}: {
+  node: TableNode;
+  onNavigate: (id: string) => void;
+}): JSX.Element {
+  return (
+    <div className="tablenode">
+      <h2>{node.label}</h2>
+      <div className="table-scroll">
+        <table>
+          {node.headers.length > 0 && (
+            <thead>
+              <tr>
+                {node.headers.map((cell, n) => (
+                  <th key={n}>
+                    <InlineRuns content={cell} onNavigate={onNavigate} />
+                  </th>
+                ))}
+              </tr>
+            </thead>
+          )}
+          <tbody>
+            {node.rows.map((row, r) => (
+              <tr key={r}>
+                {row.map((cell, c) => (
+                  <td key={c}>
+                    <InlineRuns content={cell} onNavigate={onNavigate} />
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
 }

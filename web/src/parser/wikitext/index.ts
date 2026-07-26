@@ -20,6 +20,7 @@ import type {
   ParseResult,
   SourceKind,
   SubjectNode,
+  TableNode,
   TextNode,
 } from '../ast';
 import { inlineText } from '../ast';
@@ -27,6 +28,8 @@ import { stableId } from '../id';
 import { guidanceRank, isNeverHint, looksLikeGuidance, scoreSection } from './guidance';
 import type { ImageRef } from './images';
 import { extractGalleries, findFileLinks, splitParams, stripFileLinks } from './images';
+import type { TableRef } from './tables';
+import { extractTables, markedTable } from './tables';
 
 export interface WikiPageInput {
   title: string;
@@ -756,6 +759,8 @@ interface Block {
   spoiler: boolean;
   /** Pictures referenced alongside this block. Empty unless asked for. */
   images: ImageRef[];
+  /** Set when this block *is* a table, in which case `content` is empty. */
+  table?: TableRef;
 }
 
 /** Resolves a page title to the id of its subject, when it is in this download. */
@@ -783,6 +788,8 @@ function toBlocks(
   expanded: Record<string, string> = {},
   /** The page this section is on, for resolving `[[../Sibling]]` links. */
   pageTitle = '',
+  /** The page's tables, indexed by the markers `extractTables` left behind. */
+  tables: TableRef[] = [],
 ): Block[] {
   const { text, images: fromGalleries } = extractGalleries(body);
   const blocks: Block[] = [];
@@ -813,7 +820,16 @@ function toBlocks(
       flush();
       continue;
     }
-    if (/^\s*(\{\||\|\}|\|[-+}]|!)/.test(line)) continue; // tables: skip
+    // Where a table stood. It becomes a block of its own so that it lands in
+    // the section it belongs to rather than at the foot of the page.
+    const marked = markedTable(line);
+    if (marked >= 0) {
+      const table = tables[marked];
+      flush();
+      if (table) blocks.push({ content: [], spoiler: false, images: [], table });
+      continue;
+    }
+    if (/^\s*(\{\||\|\}|\|[-+}]|!)/.test(line)) continue; // stray table syntax
 
     const { text: withoutTemplates, spoiler } = extractTemplates(line, expanded);
     const listItem = /^[*#:;]+\s*(.*)$/.exec(withoutTemplates);
@@ -924,13 +940,23 @@ function pageToSubject(
   const stack: { level: number; node: SubjectNode }[] = [{ level: 1, node: root }];
   let counter = 0;
 
-  for (const section of splitSections(stripBlockMarkup(page.wikitext), expanded)) {
+  // Tables come out before anything strips them: `stripBlockMarkup` erases
+  // `{| … |}` wholesale, which on StrategyWiki deletes whole pages. Each is
+  // replaced by a marker line, so it still lands in the section it was in.
+  const { text: withTableMarkers, tables } = extractTables(page.wikitext);
+
+  for (const section of splitSections(stripBlockMarkup(withTableMarkers), expanded)) {
     // Filing, not content: references, galleries, track listings. Dropped
     // rather than ranked — they are only a few per cent of a wiki's prose, but
     // they are rows, and rows are what you scroll past.
     if (rank && isNeverHint(section.title)) continue;
 
-    const blocks = toBlocks(section.body, resolve, images, expanded, page.title);
+    const all = toBlocks(section.body, resolve, images, expanded, page.title, tables);
+    // Tables are siblings of the section's prose rather than part of it: the
+    // prose is joined into one node, so there is no position inside it to hold
+    // them, and a table-only page has no prose at all.
+    const blocks = all.filter((block) => !block.table);
+    const tableBlocks = all.filter((block) => block.table);
 
     let target = root;
     if (section.title) {
@@ -947,7 +973,7 @@ function pageToSubject(
       target = node;
     }
 
-    if (blocks.length === 0) continue;
+    if (blocks.length === 0 && tableBlocks.length === 0) continue;
 
     const spoilers = blocks.filter((b) => b.spoiler);
     const plain = blocks.filter((b) => !b.spoiler);
@@ -1016,9 +1042,51 @@ function pageToSubject(
       };
       target.children.push(group);
     }
+
+    for (const block of tableBlocks) {
+      const node = toTableNode(
+        block.table!,
+        `${target.id}.b${target.children.length}`,
+        section.title || root.label,
+        resolve,
+        page.title,
+      );
+      if (node) target.children.push(node);
+    }
   }
 
   return collapseSectionWrappers(root);
+}
+
+/**
+ * A parsed table, or nothing if it turned out to hold no cells.
+ *
+ * The empty case is real: `extractTables` records a table for every `{|` it
+ * sees so that its marker keeps pointing at the right entry, and some of those
+ * are pure layout — a one-cell wrapper around a column of prose.
+ */
+function toTableNode(
+  table: TableRef,
+  id: string,
+  fallbackLabel: string,
+  resolve?: Resolver,
+  pageTitle = '',
+): TableNode | null {
+  const cells = (row: string[]): Inline[][] => row.map((cell) => toInline(cell, resolve, pageTitle));
+  const headers = cells(table.headers);
+  const rows = table.rows.map(cells);
+  const empty =
+    headers.every((cell) => cell.length === 0) &&
+    rows.every((row) => row.every((cell) => cell.length === 0));
+  if (empty) return null;
+
+  return {
+    id,
+    type: 'table',
+    label: table.caption ? stripMarkup(table.caption) : fallbackLabel,
+    headers,
+    rows,
+  };
 }
 
 /**

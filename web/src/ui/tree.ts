@@ -8,6 +8,7 @@
  */
 
 import type { HintDocument, Node, SubjectNode } from '../parser/ast';
+import { tableText } from '../parser/wikitext/tables';
 
 export interface TreeIndex {
   byId: Map<string, Node>;
@@ -33,6 +34,18 @@ export function buildIndex(document: HintDocument): TreeIndex {
       // Subjects, questions and text headings are searchable; hint bodies and
       // image payloads are not.
       searchable.push({ id, label: labelOf(node), type: node.type, path });
+      // A table is the exception, because its heading says nothing: "Inns" will
+      // not find "Medina", and on a reference page the cells are the only
+      // content there is. Each row is indexed under the table's own id, so a hit
+      // navigates to the table.
+      if (node.type === 'table') {
+        for (const row of node.rows) {
+          const label = tableText({ headers: [], rows: [row] })
+            .filter(Boolean)
+            .join(' · ');
+          if (label) searchable.push({ id, label, type: node.type, path });
+        }
+      }
     }
 
     const childPath = [...path, labelOf(node)];

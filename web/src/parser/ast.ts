@@ -60,6 +60,7 @@ export type Node =
   | SubjectNode
   | HintGroupNode
   | TextNode
+  | TableNode
   | ImageNode
   | LinkNode;
 
@@ -118,6 +119,30 @@ export interface TextNode extends NodeBase {
    * a page is hidden in the first place.
    */
   images?: ImageNode[];
+}
+
+/**
+ * A wiki table, kept as a table.
+ *
+ * These were being erased. The parser's block-markup stripper kept only the
+ * newlines inside `{| … |}`, on the reasonable theory that a table is layout —
+ * and on Fandom it mostly is. On StrategyWiki it is the content: `Chrono
+ * Trigger/Inns` is *nothing but* a table of fourteen inns, their eras and their
+ * prices, and it downloaded as an empty page. So do Equipment and items,
+ * Markets, Tabs, Bosses, Experience, Formulae and Techniques — most of the
+ * appendices of most games.
+ *
+ * Cells are `Inline[]` rather than strings so a link inside one stays a link:
+ * these tables cross-reference the walkthrough constantly.
+ */
+export interface TableNode extends NodeBase {
+  type: 'table';
+  /** The table's caption, or the heading it sat under. */
+  label: string;
+  /** `!` cells. Empty when the table has no header row. */
+  headers: Inline[][];
+  /** `rows[r][c]` is one cell. Ragged rows are kept as they came. */
+  rows: Inline[][][];
 }
 
 export interface Hotspot {
@@ -197,6 +222,9 @@ export function isText(n: Node): n is TextNode {
 }
 export function isImage(n: Node): n is ImageNode {
   return n.type === 'image';
+}
+export function isTable(n: Node): n is TableNode {
+  return n.type === 'table';
 }
 export function isLink(n: Node): n is LinkNode {
   return n.type === 'link';
