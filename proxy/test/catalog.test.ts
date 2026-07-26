@@ -474,6 +474,51 @@ describe('wiki registry', () => {
       expect(stub.calls()).toBe(1);
     });
 
+    it('re-asks once the record is older than the index TTL', async () => {
+      // A licence is not decoration: it decides whether documents from this
+      // wiki may leave the device. A wiki that relicenses to -NC must not keep
+      // producing shareable exports forever.
+      stubSiteinfo({
+        query: {
+          general: { sitename: 'Some Wiki', scriptpath: '', articlepath: '/wiki/$1' },
+          rightsinfo: { text: 'CC BY-SA 4.0', url: '' },
+        },
+      });
+      expect((await describeWiki(cache, 'some.wiki.gg')).personalUseOnly).toBe(false);
+
+      // Age the row past the TTL, then answer with a different licence.
+      cache.db
+        .prepare('UPDATE wiki_site SET updated_at = ? WHERE host = ?')
+        .run(Date.now() - 8 * 24 * 3600 * 1000, 'some.wiki.gg');
+      vi.restoreAllMocks();
+      stubSiteinfo({
+        query: {
+          general: { sitename: 'Some Wiki', scriptpath: '', articlepath: '/wiki/$1' },
+          rightsinfo: { text: 'CC BY-NC-SA 4.0', url: '' },
+        },
+      });
+      expect((await describeWiki(cache, 'some.wiki.gg')).personalUseOnly).toBe(true);
+    });
+
+    it('serves the stale record when the wiki cannot be reached', async () => {
+      stubSiteinfo({
+        query: {
+          general: { sitename: 'Some Wiki', scriptpath: '', articlepath: '/wiki/$1' },
+          rightsinfo: { text: 'CC BY-SA 4.0', url: '' },
+        },
+      });
+      await describeWiki(cache, 'some.wiki.gg');
+      cache.db
+        .prepare('UPDATE wiki_site SET updated_at = ? WHERE host = ?')
+        .run(Date.now() - 8 * 24 * 3600 * 1000, 'some.wiki.gg');
+
+      vi.restoreAllMocks();
+      vi.spyOn(cache, 'fetch').mockRejectedValue(new Error('upstream down'));
+      // Expired is not the same as unusable: an allowlisted host stays readable
+      // while its wiki is having a bad day.
+      expect((await describeWiki(cache, 'some.wiki.gg')).sitename).toBe('Some Wiki');
+    });
+
     it('marks an NC wiki personal-use-only', async () => {
       stubSiteinfo({
         query: {

@@ -162,6 +162,29 @@ function extractTemplates(text: string): { text: string; spoiler: boolean } {
  * Newlines inside a dropped region are preserved, so section splitting and line
  * numbering downstream are unaffected.
  */
+/**
+ * What to emit for a balanced top-level template.
+ *
+ * Single-line templates pass through untouched, for `extractTemplates` to
+ * handle. A multi-line one is layout — an infobox — and is dropped, keeping only
+ * its newlines.
+ *
+ * Unless it is a spoiler. A `{{spoiler|…}}` written across several lines holds
+ * the answer to something, and dropping it would take the page's hidden guidance
+ * with it — the section would come back empty, or the page would be rejected as
+ * having nothing on it. Those are flattened onto one line instead, which is what
+ * lets `extractTemplates`, whose brace counter is per line, recognise them at
+ * all. The newlines follow, so the payload lands as its own block and the
+ * section splitting below is unaffected.
+ */
+function flattenOrDrop(template: string): string {
+  if (!template.includes('\n')) return template;
+  const newlines = template.replace(/[^\n]/g, '');
+  const name = template.slice(2).split('|')[0]!.trim();
+  if (!SPOILER_TEMPLATES.test(name)) return newlines;
+  return template.replace(/\s*\n\s*/g, ' ') + newlines;
+}
+
 export function stripBlockMarkup(wikitext: string): string {
   let out = '';
   let buffer = '';
@@ -205,8 +228,7 @@ export function stripBlockMarkup(wikitext: string): string {
       i += 1;
       buffer += '}}';
       if (depth === 0) {
-        // Multi-line: drop it, keeping the newlines. Single-line: hand it on.
-        out += buffer.includes('\n') ? buffer.replace(/[^\n]/g, '') : buffer;
+        out += flattenOrDrop(buffer);
         buffer = '';
       }
       continue;

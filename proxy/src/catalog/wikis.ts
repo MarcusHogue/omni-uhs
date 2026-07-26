@@ -112,30 +112,38 @@ const bootstrapTarget = (host: string, kind: SourceKind): WikiTarget => ({
   allowlist: [host],
 });
 
-const read = (cache: Cache, host: string): WikiSite | null => {
+const read = (cache: Cache, host: string): { site: WikiSite; age: number } | null => {
   ensureTable(cache);
   const row = cache.db
     .prepare('SELECT * FROM wiki_site WHERE host = ?')
     .get(host) as Record<string, unknown> | undefined;
   if (!row) return null;
   return {
-    host: row['host'] as string,
-    kind: row['kind'] as SourceKind,
-    sitename: row['sitename'] as string,
-    scriptPath: row['script_path'] as string,
-    articlePath: row['article_path'] as string,
-    license: row['license'] as string,
-    licenseUrl: row['license_url'] as string,
-    personalUseOnly: (row['personal_use'] as number) === 1,
-    gamepedia: (row['gamepedia'] as number) === 1,
+    age: Date.now() - (row['updated_at'] as number),
+    site: {
+      host: row['host'] as string,
+      kind: row['kind'] as SourceKind,
+      sitename: row['sitename'] as string,
+      scriptPath: row['script_path'] as string,
+      articlePath: row['article_path'] as string,
+      license: row['license'] as string,
+      licenseUrl: row['license_url'] as string,
+      personalUseOnly: (row['personal_use'] as number) === 1,
+      gamepedia: (row['gamepedia'] as number) === 1,
+    },
   };
 };
 
 /**
- * Look a wiki up, asking it about itself if we have not already.
+ * Look a wiki up, asking it about itself if what we have has gone stale.
  *
- * Cached for `ttl.index` (a day): script paths and licences change about never,
- * and a wiki that is down should not make an allowlisted host unusable.
+ * Fresh for `ttl.index` (a day). It has to expire: a licence is not decoration
+ * here, it decides whether documents from this wiki can leave the device, and a
+ * wiki that relicenses to `-NC` would otherwise keep producing shareable
+ * exports forever. Script and article paths move too, if rarely.
+ *
+ * A stale row still beats nothing, so a failed refresh serves the old answer
+ * rather than making an allowlisted host unusable while its wiki is down.
  */
 export async function describeWiki(cache: Cache, host: string): Promise<WikiSite> {
   const lower = host.toLowerCase();
@@ -143,7 +151,7 @@ export async function describeWiki(cache: Cache, host: string): Promise<WikiSite
   if (!kind) throw new Error(`not a recognised wiki host: ${host}`);
 
   const cached = read(cache, lower);
-  if (cached) return cached;
+  if (cached && cached.age < config.ttl.index * 1000) return cached.site;
 
   const target = bootstrapTarget(lower, kind);
   const url = apiUrl(target.api, {
@@ -151,13 +159,25 @@ export async function describeWiki(cache: Cache, host: string): Promise<WikiSite
     meta: 'siteinfo',
     siprop: 'general|rightsinfo',
   });
-  const result = await cache.fetch({
-    url,
-    ttl: config.ttl.index,
-    accept: 'application/json',
-    allowlist: [lower],
-  });
-  const raw = await cache.readText(result);
+  let raw: string;
+  try {
+    const result = await cache.fetch({
+      url,
+      ttl: config.ttl.index,
+      accept: 'application/json',
+      allowlist: [lower],
+    });
+    raw = await cache.readText(result);
+  } catch (error) {
+    if (!cached) throw error;
+    log.catalog.warn(
+      { host: lower, err: (error as Error).message },
+      `could not refresh ${lower}; using what was recorded ${Math.round(
+        cached.age / 3_600_000,
+      )}h ago`,
+    );
+    return cached.site;
+  }
   const payload = JSON.parse(raw) as SiteinfoPayload;
   const general = payload.query?.general ?? {};
   const rights = parseRightsInfo(raw);

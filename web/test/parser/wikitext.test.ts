@@ -109,6 +109,58 @@ Nothing to see yet.
     expect(plain).not.toContain('key is under the mat');
   });
 
+  it('keeps a spoiler hidden but intact when it spans several lines', () => {
+    // Dropping multi-line templates is right for infoboxes and wrong for this:
+    // the answer lives inside, so the section would come back empty.
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Test Game',
+          wikitext:
+            '== The vault ==\nThe vault will not open.\n\n' +
+            '{{spoiler|\nTurn the third dial to seven,\nthen pull the lever.\n}}\n',
+          revision: '1',
+        },
+      ],
+      OPTIONS,
+    );
+    const group = [...walk(document.root)].find(
+      (n): n is HintGroupNode => n.type === 'hints',
+    )!;
+    expect(inlineText(group.hints[0]!.content)).toContain('Turn the third dial to seven');
+    expect(inlineText(group.hints[0]!.content)).toContain('pull the lever');
+
+    // ...and it is still hidden, not sitting in the visible prose.
+    const visible = [...walk(document.root)]
+      .filter((n): n is TextNode => n.type === 'text')
+      .map((n) => inlineText(n.content))
+      .join(' ');
+    expect(visible).toContain('The vault will not open.');
+    expect(visible).not.toContain('third dial');
+  });
+
+  it('still drops a multi-line infobox rather than reading it as prose', () => {
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Test Game',
+          wikitext:
+            '{{Infobox weapon\n| damage = 50\n| rarity = blue\n}}\n' +
+            'The sword is behind the waterfall.\n',
+          revision: '1',
+        },
+      ],
+      OPTIONS,
+    );
+    const said = [...walk(document.root)]
+      .filter((n): n is TextNode => n.type === 'text')
+      .map((n) => inlineText(n.content))
+      .join(' ');
+    expect(said).toContain('behind the waterfall');
+    expect(said).not.toContain('damage');
+    expect(said).not.toContain('50');
+  });
+
   it('keeps the word a one-parameter template stands in for', () => {
     // Blue Prince writes "a very complex and long {{roomtype|Puzzle}};", which
     // dropping the template turned into "a very complex and long ;".

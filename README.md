@@ -220,8 +220,11 @@ WIKI_ALLOWLIST=animalwell.wiki.gg,blue-prince.fandom.com
 in its first sentence and marks nothing as a spoiler, so rendering one as
 written would give away the puzzle you opened it to get a nudge on. Wiki pages
 are therefore re-shaped: each section heading becomes a question and its
-paragraphs become hints revealed one at a time, shortest first — the same
-progressive contract as a UHS file. A page that is mostly infobox and stat
+paragraphs become hints revealed one at a time, in the order the page tells it —
+the same progressive contract as a UHS file, minus the hand-authored ordering.
+Nothing reorders them: a wiki section is often a sequence ("first do this, then
+that"), and sorting by length would shuffle the steps to gain a spoiler
+gradation the source never had. A page that is mostly infobox and stat
 tables carries no guidance at all and is skipped with a warning rather than
 stored as a wall of parameters.
 
