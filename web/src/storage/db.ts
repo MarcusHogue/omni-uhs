@@ -59,15 +59,29 @@ const DB_VERSION = 1;
 
 let dbPromise: Promise<IDBPDatabase<OmniUhsDB>> | null = null;
 
+/**
+ * Migrations, one guarded step per version.
+ *
+ * `upgrade` runs for a brand-new database *and* for every version bump, and
+ * `createObjectStore` throws `ConstraintError` on a store that already exists.
+ * Without the `oldVersion` guards, the first bump would therefore fail on every
+ * existing install — taking the whole app down, since `getDb` is on the path to
+ * reading anything at all. The guards make each step run exactly once.
+ *
+ * Anything added here must also leave older data usable: a store added in v2 is
+ * simply empty for a library downloaded under v1.
+ */
 export function getDb(): Promise<IDBPDatabase<OmniUhsDB>> {
   dbPromise ??= openDB<OmniUhsDB>(DB_NAME, DB_VERSION, {
-    upgrade(db) {
-      const documents = db.createObjectStore('documents', { keyPath: 'id' });
-      documents.createIndex('by-title', 'normalizedTitle');
-      documents.createIndex('by-source', 'sourceKind');
-      db.createObjectStore('blobs', { keyPath: 'id' });
-      db.createObjectStore('revealState', { keyPath: 'id' });
-      db.createObjectStore('settings');
+    upgrade(db, oldVersion) {
+      if (oldVersion < 1) {
+        const documents = db.createObjectStore('documents', { keyPath: 'id' });
+        documents.createIndex('by-title', 'normalizedTitle');
+        documents.createIndex('by-source', 'sourceKind');
+        db.createObjectStore('blobs', { keyPath: 'id' });
+        db.createObjectStore('revealState', { keyPath: 'id' });
+        db.createObjectStore('settings');
+      }
     },
   });
   return dbPromise;
