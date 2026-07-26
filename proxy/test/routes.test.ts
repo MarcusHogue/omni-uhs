@@ -349,6 +349,29 @@ describe('/api/strategywiki', () => {
     expect(response.statusCode).toBe(400);
     expect(response.json().error).toMatch(/not proxied/);
   });
+
+  it('allows the CDN its pictures actually live on', async () => {
+    // Every StrategyWiki picture failed with "Upstream host not allowed:
+    // cdn.wikimg.net". The allowlist named strategywiki.org, which is where the
+    // *wiki* is — `imageinfo` hands back `https://cdn.wikimg.net/en/…` and the
+    // wiki's own host never appears in an image URL at all.
+    const url =
+      'https://cdn.wikimg.net/en/strategywiki/images/1/1a/Chrono_Trigger1.jpg';
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/strategywiki/image?url=${encodeURIComponent(url)}`,
+    });
+    expect(response.statusCode).not.toBe(400);
+  });
+
+  it('still refuses a host that is not the wiki or its CDN', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: `/api/strategywiki/image?url=${encodeURIComponent('http://169.254.169.254/latest/meta-data/x.png')}`,
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatch(/not allowed/);
+  });
 });
 
 describe('/api/catalog/search', () => {
