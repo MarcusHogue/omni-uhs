@@ -243,6 +243,29 @@ function NodeView(props: ViewProps): JSX.Element {
   }
 }
 
+/**
+ * How many pictures a question has, for the row to say so.
+ *
+ * Counting them is not a leak — it says a picture exists, not what it shows,
+ * exactly as the hint count says nothing about the hints. Without it a picture
+ * is undiscoverable: it renders only inside the hint it belongs to, so on a game
+ * like Blue Prince, with pictures under a few dozen of several hundred hints,
+ * finding one is luck rather than navigation.
+ *
+ * Decorative ones do not count. They are the sprites and separators the fetcher
+ * declined on dimensions, and advertising "2 pictures" that turn out to be
+ * furniture is worse than saying nothing.
+ */
+function pictureCount(group: HintGroupNode): number {
+  let found = 0;
+  for (const hint of group.hints) {
+    for (const image of hint.images ?? []) {
+      if (image.source?.omitted !== 'decorative') found += 1;
+    }
+  }
+  return found;
+}
+
 function SubjectView({ node, revealed, onNavigate }: ViewProps): JSX.Element {
   const children = displayChildren(node);
   if (children.length === 0) return <p className="muted">Nothing here.</p>;
@@ -252,6 +275,7 @@ function SubjectView({ node, revealed, onNavigate }: ViewProps): JSX.Element {
       {children.map((child, position) => {
         const target = child.type === 'link' ? child.targetId : child.id;
         const seen = child.type === 'hints' ? (revealed[child.id ?? ''] ?? 0) : 0;
+        const pictures = child.type === 'hints' ? pictureCount(child) : 0;
         return (
           <li key={child.id ?? position} className="row" data-type={child.type}>
             <button
@@ -268,6 +292,8 @@ function SubjectView({ node, revealed, onNavigate }: ViewProps): JSX.Element {
                   <span>
                     {child.hints.length} hint{child.hints.length === 1 ? '' : 's'}
                     {seen > 0 && ` · ${seen} revealed`}
+                    {pictures > 0 &&
+                      ` · ${pictures} picture${pictures === 1 ? '' : 's'}`}
                   </span>
                   {/* Only ever shown when the parser had an opinion. Most rows
                       carry no pill, and that is not a verdict on them. */}

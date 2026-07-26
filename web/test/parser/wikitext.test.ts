@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { HintGroupNode, ParseResult, SubjectNode, TextNode } from '../../src/parser/ast.js';
 import { inlineText, walk } from '../../src/parser/ast.js';
-import { parseWikiWalkthrough, splitSections, stripMarkup } from '../../src/parser/wikitext/index.js';
+import {
+  collectExpandable,
+  parseWikiWalkthrough,
+  splitSections,
+  stripMarkup,
+} from '../../src/parser/wikitext/index.js';
 
 const OPTIONS = {
   kind: 'strategywiki' as const,
@@ -396,6 +401,144 @@ Enter the code from the study.
       },
     );
     expect(document.source.personalUseOnly).toBe(true);
+  });
+});
+
+describe('templates standing in for words', () => {
+  const parse = (wikitext: string): ParseResult =>
+    parseWikiWalkthrough([{ title: 'Billiard Room', wikitext, revision: '1' }], {
+      ...OPTIONS,
+      kind: 'wikigg',
+      reveal: 'progressive',
+      rank: true,
+    });
+
+  const text = (wikitext: string): string =>
+    [...walk(parse(wikitext).document.root)]
+      .flatMap((node) => (node.type === 'hints' ? node.hints : []))
+      .map((hint) => inlineText(hint.content))
+      .join(' | ');
+
+  it('keeps the styled text of a two-parameter colour template', () => {
+    // Real, from blueprince.wiki.gg's dartboard solution. The colour *is* the
+    // answer, and dropping the template took the only word that mattered:
+    // "### {{ColorText|add|Blue}} is addition." came out as " is addition."
+    expect(text('== Solution ==\n# {{ColorText|add|Blue}} is addition.\n')).toContain(
+      'Blue is addition.',
+    );
+  });
+
+  it('reads the last unnamed parameter, which is where wikitext puts the text', () => {
+    expect(text('== S ==\nThe {{Color|#f00|crimson door}} opens.\n')).toContain(
+      'The crimson door opens.',
+    );
+    // Named parameters are configuration and do not count towards the arity.
+    expect(text('== S ==\nA {{Font|serif text|face=serif}} sign.\n')).toContain(
+      'A serif text sign.',
+    );
+  });
+
+  it('still refuses a two-parameter template whose roles it cannot know', () => {
+    // Not every template puts the display text last; guessing would show the
+    // hover text instead of what is on screen.
+    expect(text('== S ==\nThe {{tooltip|shown|hovered}} thing.\n')).not.toContain('hovered');
+  });
+
+  it('still drops layout parameters', () => {
+    const out = text('== S ==\nSome prose.{{Reflist|30em}}\n');
+    expect(out).toContain('Some prose.');
+    expect(out).not.toContain('30em');
+  });
+});
+
+describe('markup that is not markup', () => {
+  it('strips a tag only when the name is one', () => {
+    // Matching any `<name …>` is not safe: in `if x<y and a=b>0` the middle
+    // reads as a tag called `y` with two attributes, and stripping it left
+    // `if x0`. Attribute syntax does not disambiguate it either — `and a=b` is
+    // valid attribute syntax — so the name has to be known.
+    expect(stripMarkup('if x<y and a=b>0')).toBe('if x<y and a=b>0');
+    expect(stripMarkup('if x<y and a>b')).toBe('if x<y and a>b');
+    expect(stripMarkup('damage <10 per hit')).toBe('damage <10 per hit');
+
+    // And the tags that actually turned up across six wikis all go.
+    expect(stripMarkup('<h2>Usefulness</h2> text')).toBe('Usefulness text');
+    expect(stripMarkup('<p class="MsoNormal">para</p>')).toBe('para');
+    expect(stripMarkup('<noinclude>x</noinclude>')).toBe('x');
+    expect(stripMarkup('<twitterfeed theme=dark linkcolor=#5a93cc>feed</twitterfeed>')).toBe(
+      'feed',
+    );
+    expect(stripMarkup('<code>FIND_RABBIT</code>')).toBe('FIND_RABBIT');
+    // `<math>` goes; the arithmetic inside it is the content.
+    expect(stripMarkup('<math>0 + 5 + 13 = 18</math>')).toBe('0 + 5 + 13 = 18');
+  });
+});
+
+describe('template expansion', () => {
+  const parse = (wikitext: string, expanded: Record<string, string> = {}): ParseResult =>
+    parseWikiWalkthrough([{ title: 'Secret rabbits', wikitext, revision: '1' }], {
+      ...OPTIONS,
+      kind: 'wikigg',
+      reveal: 'progressive',
+      rank: true,
+      expanded,
+    });
+
+  const text = (wikitext: string, expanded: Record<string, string> = {}): string =>
+    [...walk(parse(wikitext, expanded).document.root)]
+      .flatMap((node) => (node.type === 'hints' ? node.hints : []))
+      .map((hint) => inlineText(hint.content))
+      .join(' | ');
+
+  const PAGE = '== Rabbits ==\nA secret collectible animal in {{AW}}.\n';
+
+  it('asks only about the calls it was going to drop', () => {
+    // `{{ColorText|add|Blue}}` is already readable, so asking about it would be
+    // a request spent on an answer already in hand.
+    const calls = collectExpandable(
+      '{{AW}} and {{ColorText|add|Blue}} and {{short|3-3}}\n',
+    );
+    expect(calls).toContain('AW');
+    expect(calls).toContain('short|3-3');
+    expect(calls).not.toContain('ColorText|add|Blue');
+  });
+
+  it('leaves out anything whose answer depends on the page', () => {
+    // Expansions are batched across a whole game, so there is no page to answer
+    // for. A shared answer would be confidently wrong rather than merely absent.
+    expect(collectExpandable('Welcome to {{PAGENAME}}.\n')).toEqual([]);
+    expect(collectExpandable('See {{SITENAME}}.\n')).toEqual([]);
+  });
+
+  it('puts the word back, and reads the result as wikitext', () => {
+    // Real: animalwell.wiki.gg writes the game's name as {{AW}}, so the sentence
+    // arrived as "a secret collectible animal in ." — and now that orphaned
+    // spaces are closed up, as the *seamless* "animal in.", which is worse: the
+    // gap was at least visible. Expansion is what makes closing them honest.
+    expect(text(PAGE)).toContain('animal in.');
+    expect(text(PAGE, { AW: "''[[Animal Well]]''" })).toContain('animal in Animal Well.');
+  });
+
+  it('refuses an expansion that is a block rather than a phrase', () => {
+    // Tunic's {{Stub}} expands to a `<div><table>` notice; Reflist to a list.
+    const out = text('== S ==\nProse.{{Stub}}\n', {
+      Stub: '<div class="nomobile"><table style="">a stub notice</table></div>',
+    });
+    expect(out).toContain('Prose.');
+    expect(out).not.toContain('stub notice');
+  });
+
+  it('behaves exactly as before when nothing was expanded', () => {
+    expect(text(PAGE, {})).toBe(text(PAGE));
+  });
+
+  it('looks up own properties only', () => {
+    // A wiki is untrusted input. `{{constructor}}` on a plain object resolves
+    // to `Object` — truthy, so optional chaining waves it through — and calling
+    // `.trim()` on a function throws and takes the whole download with it.
+    expect(() => text('== S ==\nA {{constructor}} here.\n')).not.toThrow();
+    expect(() => text('== S ==\nA {{toString}} here.\n')).not.toThrow();
+    expect(text('== S ==\nA {{constructor}} here.\n')).toContain('A here.');
   });
 });
 

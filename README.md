@@ -237,6 +237,22 @@ Nothing reorders the hints *within* a section: a wiki section is often a
 sequence ("first do this, then that"), and sorting by length would shuffle the
 steps to gain a spoiler gradation the source never had.
 
+**Wikitext hides text in three places.** A page is not prose with a bit of
+markup on it, and reading it as though it were loses words that matter. Templates
+stand in for them mid-sentence: `blueprince.wiki.gg` writes a dartboard step as
+`{{ColorText|add|Blue}} is addition`, where the colour *is* the answer. Container
+templates hold whole worked examples, nested several deep. And some words are not
+in the page at all — Animal Well writes the game's name as `{{AW}}`, whose text
+lives in the template's definition on the wiki, so the sentence arrived with a
+hole in it.
+
+The first two are parsed: a styling template gives up its display text, a
+container gives up its body, and both resolve inside-out so nesting works. The
+third cannot be, so the download asks the wiki with `action=expandtemplates` —
+batched, cached, and only for the calls that would otherwise be dropped. All of
+it is bounded: an expansion that comes back as a block rather than a phrase is
+still layout, and still discarded.
+
 **Which pages, and which of them are guidance.** A wiki is hundreds of pages
 and most of them are not hints. The proxy picks about sixty by weighing four
 signals — links from the wiki's own hand-curated main page, categories whose

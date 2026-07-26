@@ -683,6 +683,7 @@ button.danger {
 
 .row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
   padding: 11px 13px;
@@ -1056,9 +1057,31 @@ code {
   color: var(--text-dim);
 }
 
-.warnings {
+/* Parser notes on a library row. A full-width band below the title and the
+   Delete button, which needs `.row` to wrap — the two existing children are
+   `flex: 1` with `min-width: 0` and shrink rather than wrapping, so nothing
+   else moves. */
+.notes {
+  flex-basis: 100%;
+  order: 9;
   font-size: 12px;
   color: var(--warn);
+}
+
+.notes summary {
+  cursor: pointer;
+  padding: 4px 0;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+
+.notes ul {
+  margin: 2px 0 4px;
+  padding-left: 18px;
+  color: var(--text-dim);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
 }
 
 .warnings-box {
