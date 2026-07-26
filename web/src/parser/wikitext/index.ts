@@ -20,6 +20,7 @@ import type {
   SubjectNode,
   TextNode,
 } from '../ast';
+import { inlineText } from '../ast';
 import { stableId } from '../id';
 
 export interface WikiPageInput {
@@ -47,6 +48,15 @@ export interface WikiWalkthroughOptions {
   gameTitle: string;
   /** e.g. https://strategywiki.org/wiki/ */
   baseUrl: string;
+  /**
+   * The URL the document as a whole stands for.
+   *
+   * Defaults to the game's own page under `baseUrl`, which is right when a
+   * download *is* one page or one game's sub-tree. A whole wiki has no such
+   * page, so it passes its article root instead rather than linking attribution
+   * at a title that may not exist.
+   */
+  documentUrl?: string;
   license: string;
   personalUseOnly: boolean;
   fetchedAt?: string;
@@ -63,19 +73,26 @@ export interface WikiWalkthroughOptions {
 const SPOILER_TEMPLATES = /^(spoiler|hidden|collapse|mbox spoiler)/i;
 
 /**
- * Strip wiki markup down to display text, keeping internal links as link text.
+ * Namespaced links that are filing, not prose.
  *
- * Deliberately conservative: this is a reader, not a renderer, so anything not
- * understood is dropped rather than shown as raw markup.
+ * `[[Category:Creatures]]` is how a page declares its own category. It renders
+ * as nothing in the page body — MediaWiki puts it in a footer — so passing the
+ * text through turned a filing instruction into a sentence, and on a page whose
+ * only content was categories, into a hint reading "Category:Creatures".
  */
-export function stripMarkup(text: string): string {
-  return text
+const FILING_LINK = /\[\[(?:Category|File|Image|Media|Template|Special):[^\]]*\]\]/gi;
+
+/** Everything that vanishes: markers, filing, and comments. */
+const removed = (text: string): string =>
+  text
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<ref[^>]*\/>/gi, '')
     .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
-    .replace(/\[\[(?:File|Image):[^\]]*\]\]/gi, '')
-    .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
-    .replace(/\[\[([^\]]+)\]\]/g, '$1')
+    .replace(FILING_LINK, '');
+
+/** Everything else, once the links have been dealt with. */
+const cleaned = (text: string): string =>
+  text
     .replace(/\[(?:https?:)?\/\/\S+\s+([^\]]+)\]/g, '$1')
     .replace(/\[(?:https?:)?\/\/\S+\]/g, '')
     .replace(/'''''([^']+)'''''/g, '$1')
@@ -87,8 +104,74 @@ export function stripMarkup(text: string): string {
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/\s+/g, ' ')
-    .trim();
+    .replace(/\s+/g, ' ');
+
+/**
+ * Strip wiki markup down to display text, keeping internal links as link text.
+ *
+ * Deliberately conservative: this is a reader, not a renderer, so anything not
+ * understood is dropped rather than shown as raw markup.
+ */
+export function stripMarkup(text: string): string {
+  return cleaned(
+    removed(text)
+      .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
+      .replace(/\[\[([^\]]+)\]\]/g, '$1'),
+  ).trim();
+}
+
+const WIKILINK = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+
+/** How MediaWiki itself compares two page titles. */
+export function normalizePageTitle(title: string): string {
+  const trimmed = title.replace(/_/g, ' ').split('#')[0]!.trim();
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+/**
+ * Display text, with links to pages in this download kept as links.
+ *
+ * A wiki is a web, and flattening it loses the thing that makes it navigable:
+ * "see [[The Antechamber]]" is a pointer, and printing it as plain text leaves
+ * the reader to go and find that page by hand. Where the target is one of the
+ * pages downloaded with this game, it becomes a link the reader can follow;
+ * where it is not, the label stands as text, because a link to something not
+ * present would be a dead end.
+ */
+export function toInline(
+  text: string,
+  resolve?: (title: string) => string | undefined,
+): Inline[] {
+  const source = removed(text);
+  const out: Inline[] = [];
+  const push = (run: string): void => {
+    const value = cleaned(run);
+    if (!value) return;
+    const last = out[out.length - 1];
+    if (last?.kind === 'run') last.text += value;
+    else out.push({ kind: 'run', text: value });
+  };
+
+  let index = 0;
+  for (const match of source.matchAll(WIKILINK)) {
+    push(source.slice(index, match.index));
+    index = match.index + match[0].length;
+
+    const target = match[1]!;
+    const label = cleaned(match[2] ?? target).trim();
+    const targetId = resolve?.(normalizePageTitle(target));
+    if (targetId && label) out.push({ kind: 'link', label, targetId });
+    else push(label);
+  }
+  push(source.slice(index));
+
+  // Trim the ends without disturbing the single spaces that sit either side of
+  // a link, which `cleaned` deliberately preserves.
+  const first = out[0];
+  if (first?.kind === 'run') first.text = first.text.replace(/^\s+/, '');
+  const last = out[out.length - 1];
+  if (last?.kind === 'run') last.text = last.text.replace(/\s+$/, '');
+  return out.filter((item) => item.kind !== 'run' || item.text !== '');
 }
 
 /**
@@ -244,21 +327,33 @@ export function stripBlockMarkup(wikitext: string): string {
 }
 
 interface Block {
-  text: string;
+  /** Display content, with in-document links preserved as links. */
+  content: Inline[];
   spoiler: boolean;
 }
 
-const inline = (text: string): Inline[] => (text ? [{ kind: 'run', text }] : []);
+/** Resolves a page title to the id of its subject, when it is in this download. */
+type Resolver = (title: string) => string | undefined;
+
+/** Concatenate blocks into one run sequence, separated by newlines. */
+const joinBlocks = (blocks: Block[]): Inline[] =>
+  blocks.flatMap((block, index) =>
+    index === 0 ? block.content : [{ kind: 'run' as const, text: '\n' }, ...block.content],
+  );
 
 /** Split a section's wikitext into displayable blocks. */
-function toBlocks(body: string): Block[] {
+function toBlocks(body: string, resolve?: Resolver): Block[] {
   const blocks: Block[] = [];
   let paragraph: string[] = [];
   let paragraphSpoiler = false;
 
+  const push = (raw: string, spoiler: boolean): void => {
+    const content = toInline(raw, resolve);
+    if (content.length > 0) blocks.push({ content, spoiler });
+  };
+
   const flush = (): void => {
-    const text = stripMarkup(paragraph.join(' '));
-    if (text) blocks.push({ text, spoiler: paragraphSpoiler });
+    push(paragraph.join(' '), paragraphSpoiler);
     paragraph = [];
     paragraphSpoiler = false;
   };
@@ -275,8 +370,7 @@ function toBlocks(body: string): Block[] {
     const listItem = /^[*#:;]+\s*(.*)$/.exec(withoutTemplates);
     if (listItem) {
       flush();
-      const text = stripMarkup(listItem[1] ?? '');
-      if (text) blocks.push({ text, spoiler });
+      push(listItem[1] ?? '', spoiler);
       continue;
     }
     paragraph.push(withoutTemplates);
@@ -323,7 +417,8 @@ export function splitSections(wikitext: string): Section[] {
 /** Readable characters left after templates and tables are removed. */
 export function proseChars(wikitext: string): number {
   return splitSections(stripBlockMarkup(wikitext)).reduce(
-    (total, section) => total + toBlocks(section.body).reduce((n, b) => n + b.text.length, 0),
+    (total, section) =>
+      total + toBlocks(section.body).reduce((n, b) => n + inlineText(b.content).length, 0),
     0,
   );
 }
@@ -356,7 +451,12 @@ export function looksLikeReference(wikitext: string): boolean {
 }
 
 /** Build the subject tree for one page. */
-function pageToSubject(page: WikiPageInput, idPrefix: string, reveal: RevealMode): SubjectNode {
+function pageToSubject(
+  page: WikiPageInput,
+  idPrefix: string,
+  reveal: RevealMode,
+  resolve?: Resolver,
+): SubjectNode {
   const label = page.title.includes('/') ? page.title.slice(page.title.indexOf('/') + 1) : page.title;
   const root: SubjectNode = {
     id: idPrefix,
@@ -369,7 +469,7 @@ function pageToSubject(page: WikiPageInput, idPrefix: string, reveal: RevealMode
   let counter = 0;
 
   for (const section of splitSections(stripBlockMarkup(page.wikitext))) {
-    const blocks = toBlocks(section.body);
+    const blocks = toBlocks(section.body, resolve);
 
     let target = root;
     if (section.title) {
@@ -401,7 +501,7 @@ function pageToSubject(page: WikiPageInput, idPrefix: string, reveal: RevealMode
           hints: plain.map((block, index) => ({
             id: `${target.id}.p${target.children.length}:h${index}`,
             type: 'hint' as const,
-            content: inline(block.text),
+            content: block.content,
           })),
         };
         target.children.push(group);
@@ -410,7 +510,7 @@ function pageToSubject(page: WikiPageInput, idPrefix: string, reveal: RevealMode
           id: `${target.id}.t${target.children.length}`,
           type: 'text',
           label: section.title || root.label,
-          content: inline(plain.map((b) => b.text).join('\n')),
+          content: joinBlocks(plain),
         };
         target.children.push(text);
       }
@@ -426,7 +526,7 @@ function pageToSubject(page: WikiPageInput, idPrefix: string, reveal: RevealMode
         hints: spoilers.map((block, index) => ({
           id: `${target.id}.s${target.children.length}:h${index}`,
           type: 'hint' as const,
-          content: inline(block.text),
+          content: block.content,
         })),
       };
       target.children.push(group);
@@ -455,6 +555,38 @@ function collapseSectionWrappers(node: SubjectNode): SubjectNode {
   return node;
 }
 
+/**
+ * Turn links with no destination back into text.
+ *
+ * The reader navigates by node id, so a link to an id that is not in the tree
+ * is a button that goes nowhere. Cheaper to fix here, once, than to make every
+ * caller of the reader defensive about it.
+ */
+function pruneDeadLinks(roots: Node[]): void {
+  const ids = new Set<string>();
+  const collect = (node: Node): void => {
+    if (node.id) ids.add(node.id);
+    if (node.type === 'subject') node.children.forEach(collect);
+  };
+  roots.forEach(collect);
+
+  const fix = (content: Inline[]): Inline[] =>
+    content.map((item) =>
+      item.kind === 'link' && !ids.has(item.targetId)
+        ? { kind: 'run' as const, text: item.label }
+        : item,
+    );
+
+  const walkNode = (node: Node): void => {
+    if (node.type === 'subject') node.children.forEach(walkNode);
+    else if (node.type === 'text') node.content = fix(node.content);
+    else if (node.type === 'hints') {
+      for (const hint of node.hints) hint.content = fix(hint.content);
+    }
+  };
+  roots.forEach(walkNode);
+}
+
 export function parseWikiWalkthrough(
   pages: WikiPageInput[],
   options: WikiWalkthroughOptions,
@@ -463,28 +595,47 @@ export function parseWikiWalkthrough(
   const children: Node[] = [];
   const reveal = options.reveal ?? 'as-written';
 
-  pages.forEach((page, index) => {
+  // Which pages survive, decided before anything is parsed. A link can point
+  // forwards -- the first page routinely refers to the last -- so the set of
+  // link targets has to be known up front, and a page dropped later would
+  // otherwise leave links pointing at nothing.
+  const kept = pages.filter((page, index) => {
     if (page.wikitext.trim() === '') {
       warnings.push(`${page.title}: page is empty`);
-      return;
+      return false;
     }
-    if (/^#\s*REDIRECT/i.test(page.wikitext.trim())) return;
+    if (/^#\s*REDIRECT/i.test(page.wikitext.trim())) return false;
     if (options.skipReferencePages && looksLikeReference(page.wikitext)) {
       // Named, not silent: "why is that page missing" is a fair question.
       warnings.push(
         `${page.title}: skipped, reads as reference data rather than guidance ` +
           `(${proseChars(page.wikitext)} characters of prose)`,
       );
-      return;
+      return false;
     }
-    const subject = pageToSubject(page, `p:${index}`, reveal);
+    void index;
+    return true;
+  });
+
+  const pageIds = new Map(kept.map((page, index) => [normalizePageTitle(page.title), `p:${index}`]));
+  const resolve = (title: string): string | undefined => pageIds.get(title);
+
+  kept.forEach((page, index) => {
+    const subject = pageToSubject(page, `p:${index}`, reveal, resolve);
     if (subject.children.length > 0) children.push(subject);
   });
+
+  // A page can still come out empty — every section a table, say — so anything
+  // pointing at one is downgraded to plain text rather than left as a link to
+  // a node that is not in the tree.
+  pruneDeadLinks(children);
 
   if (children.length === 0) warnings.push('No readable content found on these pages.');
 
   const first = pages[0];
-  const pageUrl = `${options.baseUrl}${encodeURIComponent(options.gameTitle.replace(/ /g, '_'))}`;
+  const pageUrl =
+    options.documentUrl ??
+    `${options.baseUrl}${encodeURIComponent(options.gameTitle.replace(/ /g, '_'))}`;
   const revision = first?.revision ?? null;
 
   const root: SubjectNode =

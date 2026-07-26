@@ -87,11 +87,16 @@ you download anything, because it decides what you can do with the result: a
 everything from it **personal use only**, which keeps it out of a shareable
 export while leaving it in a full backup.
 
-Wiki pages are re-shaped on the way in rather than stored as written — sections
-become questions, paragraphs become hints revealed one at a time. A page that
-turns out to be all infobox and stat tables is refused with a note saying so,
-which is the expected outcome for a weapon or item page. Aim at the puzzle,
-secret and ending pages.
+A wiki downloads as **one title**, not one page at a time: the wiki is the game,
+and its pages become the sections of a single library entry. Which pages come
+down is worked out from the categories game wikis file guidance under — Puzzles,
+Secrets, Endings, Bosses and so on — falling back to the wiki's own search when
+a wiki files nothing. Pages that turn out to be all infobox and stat tables are
+dropped on the way in, which is the expected outcome for a weapon or item page.
+
+Content is re-shaped rather than stored as written: sections become questions
+and paragraphs become hints revealed one at a time. Links between pages that
+came down together stay live, so a hint pointing at another page is a tap.
 
 **`WIKI_ALLOWLIST`** is still there, for seeding a fresh container with wikis
 you always want:
@@ -308,20 +313,43 @@ knowing before you paste a log into an issue.
 
 Both images are stamped with the commit they were built from, and the app knows
 its own. `GET /api/version` reports the proxy's; the web bundle carries its own
-inside it.
+inside it. Three things can be out of step, and the app names each one:
 
-- When a **new web build** is waiting, the app shows a one-line notice you can
-  dismiss, and **Settings → Version** offers *Reload to update*. Nothing reloads
-  itself: an app that refreshed out from under you mid-hint would be worse than
-  one that waits.
-- When the **proxy reports a different build**, the app says so. That usually
-  means one container was pulled and the other was not — `docker compose pull`
-  fetches both. If they already match on the server, the browser is holding an
-  older bundle and a reload picks the new one up.
+- **A newer image has been published.** The proxy asks GHCR what `:latest`
+  currently is and compares it with what is running, so the app can tell you a
+  release exists *before* anyone pulls it. Nothing else here can: every other
+  signal compares the browser with the server, and until you pull, both are on
+  the same old build and agree with each other. There is nothing to reload for
+  this one — Settings tells you what to run on the host.
+- **A new web build is waiting.** Already downloaded by the service worker;
+  **Settings → Version** offers *Reload to update*. Nothing reloads itself: an
+  app that refreshed out from under you mid-hint would be worse than one that
+  waits.
+- **The proxy reports a different build than the app.** Usually one container
+  was pulled and the other was not — `docker compose pull` fetches both. If they
+  already match on the server, the browser is holding an older bundle and a
+  reload picks the new one up.
 
-Settings always shows both versions and the current state, whether or not the
-notice was dismissed. Dismissal is remembered per version, so the next release
-asks again.
+Settings always shows every version it knows — this app, the proxy, and what is
+published for each image — whether or not the notice was dismissed. Dismissal is
+remembered per version, so the next release asks again.
+
+The registry check works by comparing manifests: `:latest` and the tag you are
+running either name the same image or they do not. That needs nothing published
+alongside the image and no cooperation from the build, so it works on every
+image already in the registry — including ones built before any of this existed.
+
+When the image also carries a `com.omni-uhs.build` label, the check uses it to
+*name* the new build ("Build 9f31c02 is available"); without one it just says a
+newer build exists. That label is deliberately not the standard
+`org.opencontainers.image.version`: labels are inherited from the base image, so
+the standard key on the web image returns Caddy's version rather than ours.
+
+An image that cannot be compared — the registry unreachable, or a running build
+with no tag there — is reported as *not compared*, never as up to date.
+Anonymous, public, and cached for six hours, so it is a handful of requests a
+day. `RELEASE_IMAGES=` (empty) switches it off; point it elsewhere if you
+publish your own fork.
 
 Images built by hand report `dev`, which switches the whole thing off rather
 than comparing versions that do not mean anything.

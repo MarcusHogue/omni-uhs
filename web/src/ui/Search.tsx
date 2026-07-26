@@ -313,9 +313,9 @@ function describe(entry: CatalogEntry): string {
   } else if (entry.sourceKind === 'strategywiki') {
     parts.push(entry.ref);
   } else if (entry.host) {
-    // The group heading is the game; what distinguishes rows is which wiki.
-    parts.push(entry.host.replace(/\.(fandom\.com|wiki\.gg)$/, ''));
-    parts.push(entry.ref);
+    // A wiki row is the whole game, so the wiki's address is the useful
+    // distinguishing detail — there is no page to name.
+    parts.push(entry.host);
   } else {
     parts.push(entry.title);
   }

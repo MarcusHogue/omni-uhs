@@ -13,7 +13,7 @@ import type { Cache } from '../cache/index.js';
 import { searchIfArchive, refreshIfArchiveCatalog } from './ifarchive.js';
 import { searchIfdb } from './ifdb.js';
 import { STRATEGYWIKI, searchWiki } from './mediawiki.js';
-import { allowlistedHosts, targetFor } from './wikis.js';
+import { allowlistedHosts, describeWiki, gameTitleOf, siteTarget } from './wikis.js';
 import { refreshUhsCatalog, searchUhsCatalog } from './uhs.js';
 import { normalizeTitle } from './normalize.js';
 import type { CatalogEntry, CatalogGroup, SearchResponse, SourceKind } from './types.js';
@@ -40,9 +40,17 @@ const WIKI_SEARCH_MAX = 8;
 /**
  * Search every allowlisted wiki on a platform.
  *
- * Each wiki gets its own slice of the budget rather than sharing one: the outer
- * `withTimeout` in `searchCatalog` covers the whole source, so without this a
- * single slow wiki would starve the rest and the source would return nothing.
+ * One result per *wiki*, not per page. A game wiki is a game — every page on
+ * `blue-prince.fandom.com` is about Blue Prince — so listing its pages as
+ * separate search results asks you to collect a game by hand, and puts the same
+ * title on screen a dozen times. The wiki is the title; the pages are its
+ * sections, gathered at download.
+ *
+ * Matching is by the wiki's own name first, which costs nothing: `describeWiki`
+ * is cached, so a keystroke that matches "Blue Prince Wiki" makes no upstream
+ * request at all. Only when the name does not match is the wiki asked whether
+ * it has a matching page — that catches a wiki named for its series, like
+ * Zelda's, and still answers with the game rather than the page.
  */
 async function searchPlatform(
   cache: Cache,
@@ -52,12 +60,34 @@ async function searchPlatform(
   const hosts = allowlistedHosts(cache, kind).slice(0, WIKI_SEARCH_MAX);
   if (hosts.length === 0) return [];
 
+  const wanted = normalizeTitle(query);
   const perWiki = Math.max(2000, Math.floor(config.searchTimeoutMs * 0.8));
+
   const results = await Promise.all(
     hosts.map(async (host) => {
       try {
-        const target = await targetFor(cache, host);
-        return await withTimeout(host, perWiki, searchWiki(cache, target, query, 10));
+        const site = await describeWiki(cache, host);
+        const game = gameTitleOf(site.sitename, host);
+        const normalized = normalizeTitle(game);
+
+        const namedMatch = normalized.includes(wanted) || wanted.includes(normalized);
+        if (!namedMatch) {
+          const target = siteTarget(site);
+          const hits = await withTimeout(host, perWiki, searchWiki(cache, target, query, 1));
+          if (hits.length === 0) return [];
+        }
+
+        return [
+          {
+            sourceKind: kind,
+            title: game,
+            normalizedTitle: normalized,
+            // The host identifies the game here: there is one entry per wiki,
+            // and the pages it resolves to are decided at download.
+            ref: host,
+            host,
+          } satisfies CatalogEntry,
+        ];
       } catch (error) {
         // One unreachable wiki must not fail the platform. It is logged rather
         // than surfaced: the user allowlisted a host, not a promise it is up.

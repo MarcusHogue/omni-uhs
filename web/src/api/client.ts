@@ -14,7 +14,15 @@ export interface CatalogEntry {
   ref: string;
   /** Which wiki, for the multi-wiki sources. Unset elsewhere. */
   host?: string;
-  meta?: { year?: number; platform?: string; complete?: boolean; size?: number; date?: string };
+  meta?: {
+    year?: number;
+    platform?: string;
+    complete?: boolean;
+    size?: number;
+    date?: string;
+    license?: string;
+    personalUseOnly?: boolean;
+  };
 }
 
 export interface CatalogGroup {
@@ -47,6 +55,15 @@ export interface WikiSite {
   error?: string;
 }
 
+/** The pages of a wiki that carry guidance, resolved by the proxy. */
+export interface WikiPageCandidates {
+  host: string;
+  game: string;
+  titles: string[];
+  fromCategories: number;
+  fromSearch: number;
+}
+
 /** A wiki the proxy found and verified, offered for adding. */
 export interface WikiCandidate extends WikiSite {
   allowed: boolean;
@@ -57,6 +74,27 @@ export interface DiscoveryResult {
   query: string;
   candidates: WikiCandidate[];
   probed: string[];
+}
+
+/** What the registry is offering, per image. */
+export interface ImageRelease {
+  name: string;
+  reference: string;
+  /** `false` means a newer image exists; `null` means it could not be settled. */
+  current: boolean | null;
+  /** The published build's name, when the image declares one. */
+  available: string | null;
+  running: string | null;
+  /** Short hash of the published manifest — the image's identity without a label. */
+  digest: string | null;
+  error?: string;
+}
+
+export interface ReleaseStatus {
+  enabled: boolean;
+  running: string;
+  images: ImageRelease[];
+  checkedAt: string | null;
 }
 
 export interface SourceInfo {
@@ -225,6 +263,19 @@ export const api = {
     return getJson<SearchResponse>(`/api/catalog/search?${params}`, signal);
   },
 
+  /**
+   * Whether the registry holds a newer image than the one running.
+   *
+   * The web build is passed in because only the browser knows it — the version
+   * is compiled into this bundle, not into anything the container can read.
+   */
+  release(webVersion: string, signal?: AbortSignal): Promise<ReleaseStatus> {
+    return getJson<ReleaseStatus>(
+      `/api/release?web=${encodeURIComponent(webVersion)}`,
+      signal,
+    );
+  },
+
   sources(signal?: AbortSignal): Promise<{ sources: SourceInfo[] }> {
     return getJson<{ sources: SourceInfo[] }>('/api/catalog/sources', signal);
   },
@@ -239,6 +290,14 @@ export const api = {
   wiki<T>(host: string, params: Record<string, string>, signal?: AbortSignal): Promise<T> {
     return getJson<T>(
       `/api/wiki/${encodeURIComponent(host)}?${new URLSearchParams(params)}`,
+      signal,
+    );
+  },
+
+  /** Which of a wiki's pages are worth downloading as one game. */
+  wikiPages(host: string, signal?: AbortSignal): Promise<WikiPageCandidates> {
+    return getJson<WikiPageCandidates>(
+      `/api/wiki/${encodeURIComponent(host)}/pages`,
       signal,
     );
   },

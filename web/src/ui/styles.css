@@ -626,6 +626,21 @@ button.danger {
   opacity: 0.7;
 }
 
+/*
+ * A cross-reference inside hint text.
+ *
+ * Underlined rather than only coloured: these sit mid-sentence, several themes
+ * are near-monochrome, and a link nobody can see is the same as no link. The
+ * font is inherited so it reads as part of the sentence it is in.
+ */
+.inline-link {
+  color: var(--accent);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
 .buttons {
   display: flex;
   gap: 8px;

@@ -20,6 +20,9 @@ import type { CatalogEntry } from '../api/client';
  * and a value that had to be fetched could not be used from a render.
  */
 export function wikiPageUrl(host: string, ref: string): string {
+  // A wiki entry is the whole game, and its `ref` is the host itself. The
+  // document records the wiki's article root, so that is what has to match.
+  if (ref === host) return `https://${host}/wiki/`;
   return `https://${host}/wiki/${encodeURIComponent(ref.replace(/ /g, '_'))}`;
 }
 

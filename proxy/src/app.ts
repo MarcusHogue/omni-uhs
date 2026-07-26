@@ -5,8 +5,10 @@
 
 import Fastify, { LogController, type FastifyBaseLogger, type FastifyInstance } from 'fastify';
 
+import { getCache } from './cache/index.js';
 import { config } from './config.js';
 import { log, logger } from './log.js';
+import { checkRelease } from './release.js';
 import { UpstreamRejected } from './upstream/allowlist.js';
 import { catalogRoutes } from './routes/catalog.js';
 import { ifArchiveRoutes } from './routes/ifarchive.js';
@@ -139,6 +141,22 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
       startedAt: STARTED_AT,
     }),
   );
+
+  /**
+   * Whether a newer image has been published.
+   *
+   * Lazy rather than polled: the answer is cached for six hours, so asking on
+   * every app launch costs nothing, and a container nobody opens makes no
+   * requests at all.
+   */
+  app.get('/api/release', async (request, reply) => {
+    // The browser passes its own build: the web image's version is inside its
+    // bundle, so the server cannot know what is actually being served.
+    const { web } = request.query as { web?: string };
+    return reply
+      .header('cache-control', 'no-store')
+      .send(await checkRelease(getCache(), web));
+  });
 
   await app.register(uhsRoutes);
   await app.register(ifArchiveRoutes);

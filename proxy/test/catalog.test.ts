@@ -13,6 +13,7 @@ import { describeSources, groupEntries } from '../src/catalog/search.js';
 import { fallbackSlugs, hostFromQuery, slugCandidates } from '../src/catalog/discover.js';
 import {
   allowWiki,
+  gameTitleOf,
   allowedWikiHosts,
   describeWiki,
   forgetWiki,
@@ -441,6 +442,18 @@ describe('wiki discovery', () => {
 });
 
 describe('wiki registry', () => {
+  it('names the game rather than the wiki', () => {
+    // A search result is a game, so "Blue Prince Wiki" would put the word Wiki
+    // in the library next to Zork and Myst.
+    expect(gameTitleOf('Blue Prince Wiki', 'blue-prince.fandom.com')).toBe('Blue Prince');
+    expect(gameTitleOf('Animal Well Wiki', 'animalwell.wiki.gg')).toBe('Animal Well');
+    expect(gameTitleOf('The Official Terraria Wiki', 'terraria.wiki.gg')).toBe('The Official Terraria');
+    // A game whose name ends in Wiki is not a thing, but a wiki with no
+    // sitename is: fall back to something readable from the host.
+    expect(gameTitleOf('', 'blue-prince.fandom.com')).toBe('Blue Prince');
+    expect(gameTitleOf('Wiki', 'animalwell.wiki.gg')).toBe('Animalwell');
+  });
+
   it('routes a host to the right source', () => {
     expect(kindForHost('blue-prince.fandom.com')).toBe('fandom');
     expect(kindForHost('animalwell.wiki.gg')).toBe('wikigg');

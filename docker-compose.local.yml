@@ -27,6 +27,9 @@ services:
       UPSTREAM_ALLOWLIST: ${UPSTREAM_ALLOWLIST:-uhs-hints.com,www.uhs-hints.com,strategywiki.org,www.strategywiki.org,ifdb.org,ifarchive.org,www.ifarchive.org}
       WIKI_ALLOWLIST: ${WIKI_ALLOWLIST:-}
       SEARCH_SOURCES: ${SEARCH_SOURCES:-uhs,ifarchive,ifdb}
+      # `-` not `:-`: an empty value here means "do not check the registry",
+      # and `:-` would quietly substitute the default back in.
+      RELEASE_IMAGES: ${RELEASE_IMAGES-ghcr.io/marcushogue/omni-uhs-proxy,ghcr.io/marcushogue/omni-uhs-web}
       LOG_LEVEL: ${LOG_LEVEL:-info}
       LOG_REQUESTS: ${LOG_REQUESTS:-true}
       USER_AGENT: ${USER_AGENT:-OmniUHS/1.0 (+personal use; local development)}

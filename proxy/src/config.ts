@@ -90,6 +90,8 @@ export const config = {
     wiki: int(process.env['CACHE_TTL_WIKI'], 12 * HOUR),
     search: int(process.env['CACHE_TTL_SEARCH'], 6 * HOUR),
     index: int(process.env['CACHE_TTL_INDEX'], 24 * HOUR),
+    /** How often to ask the registry whether a newer image has been pushed. */
+    release: int(process.env['CACHE_TTL_RELEASE'], 6 * HOUR),
   },
 
   /** Politeness: at most this many in-flight requests per upstream host. */
@@ -118,6 +120,29 @@ export const config = {
     'ifarchive',
     'ifdb',
   ]) as ('uhs' | 'ifarchive' | 'ifdb' | 'strategywiki' | 'fandom' | 'wikigg')[],
+
+  /**
+   * The images to watch for newer builds.
+   *
+   * Answering "should I pull?" means asking the registry, because nothing on
+   * the NAS can know a build exists until it is fetched. These are the images
+   * this deployment was made from; point them elsewhere if you publish your own
+   * fork. Set to an empty string to switch the check off entirely.
+   *
+   * GHCR only: the token dance below is registry-specific, and this is where
+   * the project's images live.
+   */
+  // Defined-but-empty means off, which `list` cannot express: it treats an
+  // empty value as "unset" and hands back the fallback. That is right for
+  // SEARCH_SOURCES, where empty must not mean "search nothing", and wrong here,
+  // where switching the check off is a thing someone will reasonably want.
+  releaseImages:
+    process.env['RELEASE_IMAGES']?.trim() === ''
+      ? []
+      : list(process.env['RELEASE_IMAGES'], [
+          'ghcr.io/marcushogue/omni-uhs-proxy',
+          'ghcr.io/marcushogue/omni-uhs-web',
+        ]),
 } as const;
 
 export type Config = typeof config;

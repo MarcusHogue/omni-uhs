@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 
 import { api, isOfflineError, type WikiSite } from '../api/client';
 import {
@@ -332,6 +332,29 @@ export function Settings(): JSX.Element {
               <dd className="mono">
                 {update.state.proxyVersion ?? (online ? 'not reachable' : 'offline')}
               </dd>
+              {/* What the registry holds, per image, because the two publish
+                  independently and can genuinely differ. */}
+              {update.state.release?.images.map((image) => (
+                <Fragment key={image.name}>
+                  <dt>Published {image.name}</dt>
+                  {/* The comparison is the answer; the version only names it,
+                      and images built before the label do not carry one. A
+                      failure is a sentence, and `.mono` does not wrap. */}
+                  {image.current === false ? (
+                    <dd>
+                      <span className="mono">{image.available ?? 'a newer build'}</span>{' '}
+                      <span className="muted">— newer than yours</span>
+                    </dd>
+                  ) : image.current === true ? (
+                    <dd className="muted">
+                      same image you are running
+                      {image.available && <span className="mono"> ({image.available})</span>}
+                    </dd>
+                  ) : (
+                    <dd className="muted">{image.error ?? 'could not be compared'}</dd>
+                  )}
+                </Fragment>
+              ))}
             </dl>
             {update.state.reason === 'service-worker' && (
               <div className="warnings-box">
@@ -358,15 +381,59 @@ export function Settings(): JSX.Element {
                 </button>
               </div>
             )}
+            {update.state.reason === 'registry-release' && (
+              <div className="warnings-box">
+                <strong>
+                  {update.state.release?.version
+                    ? `A newer build has been published: ${update.state.release.version}.`
+                    : 'A newer build has been published.'}
+                </strong>
+                <p>
+                  This one is not in the browser&rsquo;s hands — the images on the host are
+                  still the older build, so there is nothing here to reload. Pull them
+                  where the stack runs:
+                </p>
+                <p>
+                  <code>docker compose pull &amp;&amp; docker compose up -d</code>
+                </p>
+                <p className="muted">
+                  {update.state.release?.behind.length === 1
+                    ? `The ${update.state.release.behind[0]} image is behind.`
+                    : 'Both images are behind.'}{' '}
+                  {(update.state.release?.unknown.length ?? 0) > 0 && (
+                    <>
+                      The {update.state.release!.unknown.join(' and ')} image
+                      {update.state.release!.unknown.length === 1 ? '' : 's'} could not be
+                      compared, so {update.state.release!.unknown.length === 1 ? 'it is' : 'they are'}{' '}
+                      not accounted for here.{' '}
+                    </>
+                  )}
+                  On a Synology, Container Manager &rarr; Registry &rarr; pull{' '}
+                  <code>latest</code>, then rebuild the project.
+                </p>
+              </div>
+            )}
+            {/*
+              "Up to date" is a claim about all three checks, so it needs all
+              three to have happened. `checked` only covers /api/version; with
+              the registry unreachable every image is "could not be compared"
+              and saying this anyway would contradict the list directly above.
+            */}
             {update.state.reason === null &&
-              (update.state.checked ? (
-                <p className="muted">Up to date.</p>
-              ) : (
+              (!update.state.checked ? (
                 <p className="muted">
                   {online
                     ? 'The proxy has not answered a version check yet, so there is nothing to compare against.'
                     : 'Offline — versions can only be compared with a connection.'}
                 </p>
+              ) : (update.state.release?.unknown.length ?? 0) > 0 ? (
+                <p className="muted">
+                  The app and the proxy match. Whether a newer image has been published
+                  could not be checked
+                  {online ? '' : ' — you are offline'}.
+                </p>
+              ) : (
+                <p className="muted">Up to date.</p>
               ))}
             <div className="buttons">
               <button type="button" onClick={() => void update.check()}>
