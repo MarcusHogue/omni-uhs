@@ -920,6 +920,41 @@ a.row-action:active {
   line-height: 1.6;
 }
 
+/* A picture belonging to a revealed hint. Sits inside the hint body, so it
+   appears and disappears with it. */
+.hint-image {
+  margin: 12px 0 4px;
+}
+
+.hint-image img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  /* Wiki screenshots are routinely transparent PNGs of light UI; on a dark
+     theme they would otherwise be invisible. */
+  background: #fff;
+}
+
+.hint-image figcaption {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-top: 6px;
+  line-height: 1.45;
+}
+
+.image-missing {
+  padding: 12px;
+  border: var(--border-w) dashed var(--line);
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.error-inline {
+  color: var(--danger);
+}
+
 .reveal {
   width: 100%;
   background: var(--accent-soft);
@@ -1087,6 +1122,32 @@ code {
   height: 20px;
   flex: none;
   accent-color: var(--accent);
+}
+
+/* Two short labelled controls side by side, stacking on a narrow phone. */
+.field-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  padding: 6px 0 10px;
+}
+
+.field-row label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 14px;
+  color: var(--text-dim);
+}
+
+.field-row select {
+  min-height: 44px;
+  font-size: 15px;
+  color: var(--text);
+  background: var(--surface-2);
+  border: var(--border-w) solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 0 10px;
 }
 
 /* A consent checkbox whose label is a sentence, not two words. */

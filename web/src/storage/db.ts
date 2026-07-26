@@ -36,6 +36,32 @@ export interface StoredBlob {
   contentType: string;
 }
 
+/**
+ * One picture from a wiki.
+ *
+ * A store of its own, and neither of the obvious alternatives:
+ *
+ * - *not* inline in the document, because `listDocuments` does `getAll` and
+ *   would then read Blue Prince's 11 MB of scans on every visit to the Library;
+ * - *not* in `blobs`, which is keyed one row per document — per-image rows there
+ *   would survive `deleteDocument` and leak tens of megabytes per deleted title.
+ */
+export interface StoredImage {
+  /** `<documentId>|<file>`, matching `ImageNode.blobKey`. */
+  key: string;
+  documentId: string;
+  bytes: Uint8Array;
+  /** As served, which for Fandom is image/webp whatever the title says. */
+  mime: string;
+  width: number;
+  height: number;
+}
+
+/** The key an image is stored and looked up under. */
+export function imageKey(documentId: string, file: string): string {
+  return `${documentId}|${file}`;
+}
+
 export interface RevealState {
   id: string;
   /** node id -> how many hints of that group the user has revealed. */
@@ -50,12 +76,17 @@ interface OmniUhsDB extends DBSchema {
     indexes: { 'by-title': string; 'by-source': string };
   };
   blobs: { key: string; value: StoredBlob };
+  images: {
+    key: string;
+    value: StoredImage;
+    indexes: { 'by-document': string };
+  };
   revealState: { key: string; value: RevealState };
   settings: { key: string; value: unknown };
 }
 
 const DB_NAME = 'omni-uhs';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 let dbPromise: Promise<IDBPDatabase<OmniUhsDB>> | null = null;
 
@@ -82,6 +113,12 @@ export function getDb(): Promise<IDBPDatabase<OmniUhsDB>> {
         db.createObjectStore('revealState', { keyPath: 'id' });
         db.createObjectStore('settings');
       }
+      if (oldVersion < 2) {
+        // Wiki pictures. Empty for a library downloaded under v1, which is the
+        // whole point: every one of those documents keeps working untouched.
+        const images = db.createObjectStore('images', { keyPath: 'key' });
+        images.createIndex('by-document', 'documentId');
+      }
     },
   });
   return dbPromise;
@@ -95,11 +132,15 @@ export function resetDb(): void {
 export async function putDocument(
   stored: StoredDocument,
   blob?: StoredBlob,
+  images?: StoredImage[],
 ): Promise<void> {
   const db = await getDb();
-  const tx = db.transaction(['documents', 'blobs'], 'readwrite');
+  const tx = db.transaction(['documents', 'blobs', 'images'], 'readwrite');
   await tx.objectStore('documents').put(stored);
   if (blob) await tx.objectStore('blobs').put(blob);
+  // One transaction with the document, so a half-written download cannot leave
+  // a title whose pictures are a previous attempt's.
+  for (const image of images ?? []) await tx.objectStore('images').put(image);
   await tx.done;
 }
 
@@ -114,11 +155,29 @@ export async function listDocuments(): Promise<StoredDocument[]> {
 
 export async function deleteDocument(id: string): Promise<void> {
   const db = await getDb();
-  const tx = db.transaction(['documents', 'blobs', 'revealState'], 'readwrite');
+  const tx = db.transaction(['documents', 'blobs', 'images', 'revealState'], 'readwrite');
   await tx.objectStore('documents').delete(id);
   await tx.objectStore('blobs').delete(id);
   await tx.objectStore('revealState').delete(id);
+  // Cursor over the index, not one delete per known key: the document is going
+  // away and its pictures must go with it whatever the AST still says. A missed
+  // row here is tens of megabytes that nothing will ever look at again, and
+  // nothing surfaces it until the quota fills.
+  const images = tx.objectStore('images').index('by-document');
+  for (let cursor = await images.openCursor(id); cursor; cursor = await cursor.continue()) {
+    await cursor.delete();
+  }
   await tx.done;
+}
+
+/** The bytes of one picture, or undefined if it was never stored. */
+export async function getImage(key: string): Promise<StoredImage | undefined> {
+  return (await getDb()).get('images', key);
+}
+
+/** Every picture belonging to a document — for export, and for sizing. */
+export async function listImages(documentId: string): Promise<StoredImage[]> {
+  return (await getDb()).getAllFromIndex('images', 'by-document', documentId);
 }
 
 export async function getBlob(id: string): Promise<StoredBlob | undefined> {

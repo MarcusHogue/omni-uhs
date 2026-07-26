@@ -10,19 +10,27 @@ import { unzipSync } from 'fflate';
 
 import type { CatalogEntry } from '../api/client';
 import { api } from '../api/client';
-import type { HintDocument, ParseResult } from '../parser/ast';
+import type { HintDocument, ImageNode, ParseResult } from '../parser/ast';
+import { walk } from '../parser/ast';
 import { parseInvisiclues } from '../parser/invisiclues';
 import { parseUhs } from '../parser/uhs';
 import { parseWikiWalkthrough } from '../parser/wikitext';
-import { putDocument, type StoredDocument } from './db';
+import { putDocument, type StoredDocument, type StoredImage } from './db';
+import { fetchImages } from './images';
+import { imageSettings } from './settings';
 
 export interface DownloadResult {
   stored: StoredDocument;
   warnings: string[];
 }
 
-/** Rough byte size of a stored document, for the library's size column. */
-function estimateSize(document: HintDocument, raw: number): number {
+/**
+ * Rough byte size of a stored document, for the library's size column.
+ *
+ * `extra` is bytes held outside the document — wiki pictures live in their own
+ * store, so walking the AST for them finds nothing and the caller has to say.
+ */
+function estimateSize(document: HintDocument, raw: number, extra = 0): number {
   let images = 0;
   const visit = (node: unknown): void => {
     if (!node || typeof node !== 'object') return;
@@ -37,10 +45,10 @@ function estimateSize(document: HintDocument, raw: number): number {
   };
   visit(document.root);
   // JSON overhead is roughly the text length; images are counted exactly.
-  return raw + images + JSON.stringify(document, (k, v) => (k === 'data' ? '' : v)).length;
+  return raw + images + extra + JSON.stringify(document, (k, v) => (k === 'data' ? '' : v)).length;
 }
 
-function toStored(result: ParseResult, rawSize: number): StoredDocument {
+function toStored(result: ParseResult, rawSize: number, extra = 0): StoredDocument {
   const { document } = result;
   const stored: StoredDocument = {
     id: document.id,
@@ -51,7 +59,7 @@ function toStored(result: ParseResult, rawSize: number): StoredDocument {
     license: document.source.license,
     personalUseOnly: document.source.personalUseOnly,
     fetchedAt: document.fetchedAt,
-    size: estimateSize(document, rawSize),
+    size: estimateSize(document, rawSize, extra),
     warnings: result.warnings,
     document,
   };
@@ -94,6 +102,14 @@ export function extractUhs(bytes: Uint8Array): Uint8Array {
 export interface DownloadOptions {
   decodeIncentive?: boolean;
   signal?: AbortSignal;
+  /**
+   * Progress, so a long download does not read as a hang.
+   *
+   * Blue Prince fetches 280 pictures behind one button; at the proxy's
+   * two-per-host politeness limit that is the better part of a minute of
+   * silence otherwise.
+   */
+  onProgress?: (phase: 'pages' | 'images', done: number, total: number) => void;
 }
 
 export async function downloadEntry(
@@ -272,16 +288,23 @@ async function fetchPages(
 async function storeWiki(
   result: ReturnType<typeof parseWikiWalkthrough>,
   fetched: WikiPageContent[],
+  images: StoredImage[] = [],
 ): Promise<DownloadResult> {
+  const imageBytes = images.reduce((n, image) => n + image.bytes.length, 0);
   const stored = toStored(
     result,
     fetched.reduce((n, p) => n + p.wikitext.length, 0),
+    imageBytes,
   );
-  await putDocument(stored, {
-    id: stored.id,
-    bytes: new TextEncoder().encode(JSON.stringify(fetched)),
-    contentType: 'application/json',
-  });
+  await putDocument(
+    stored,
+    {
+      id: stored.id,
+      bytes: new TextEncoder().encode(JSON.stringify(fetched)),
+      contentType: 'application/json',
+    },
+    images,
+  );
   return { stored, warnings: result.warnings };
 }
 
@@ -328,10 +351,13 @@ async function downloadWiki(
     throw new Error(`No readable pages found on ${host}.`);
   }
 
+  const policy = await imageSettings();
+
   // Batched, because one request per page would be forty round trips to
   // somebody else's server for a single download.
   const fetched: WikiPageContent[] = [];
   for (let i = 0; i < candidates.titles.length; i += TITLE_BATCH) {
+    options.onProgress?.('pages', i, candidates.titles.length);
     const batch = candidates.titles.slice(i, i + TITLE_BATCH);
     const response = await api.wiki<WikiRevisionsResponse>(
       host,
@@ -355,6 +381,8 @@ async function downloadWiki(
     }
   }
 
+  options.onProgress?.('pages', candidates.titles.length, candidates.titles.length);
+
   if (fetched.length === 0) throw new Error(`No pages could be read from ${host}.`);
 
   // Alphabetical, so the same game downloaded twice reads the same way; the
@@ -371,13 +399,31 @@ async function downloadWiki(
     personalUseOnly: site.personalUseOnly,
     reveal: 'progressive',
     rank: true,
+    images: policy.enabled,
   });
 
   if (result.document.root.children.length === 0) {
-    throw new Error(
-      `Nothing on ${host} read as guidance — every page fetched looks like reference data.`,
-    );
+    throw new Error(`No readable content found on ${host}.`);
   }
 
-  return storeWiki(result, fetched);
+  const nodes: ImageNode[] = [];
+  if (policy.enabled) {
+    for (const node of walk(result.document.root)) if (node.type === 'image') nodes.push(node);
+  }
+
+  const pictures = await fetchImages(host, result.document.id, nodes, policy, {
+    ...(options.signal ? { signal: options.signal } : {}),
+    onProgress: (done, total) => options.onProgress?.('images', done, total),
+  });
+  result.warnings.push(...pictures.warnings);
+
+  // Embedded pictures make the document personal-use-only whatever the text
+  // licence says. Fandom and wiki.gg publish no per-image licence at all — the
+  // CC-BY-SA that covers the prose does not necessarily cover a screenshot of
+  // somebody's game — so a document carrying them is kept out of a shareable
+  // export. Decided with the user, cost accepted: most wiki games stop
+  // appearing in a share.
+  if (pictures.images.length > 0) result.document.source.personalUseOnly = true;
+
+  return storeWiki(result, fetched, pictures.images);
 }

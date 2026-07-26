@@ -44,8 +44,19 @@ describe('schema upgrades', () => {
   it('opens a fresh database', async () => {
     const db = await getDb();
     expect([...db.objectStoreNames].sort()).toEqual(
-      ['blobs', 'documents', 'revealState', 'settings'].sort(),
+      ['blobs', 'documents', 'images', 'revealState', 'settings'].sort(),
     );
+  });
+
+  it('adds the images store to a v1 database', async () => {
+    await createV1();
+    resetDb();
+    const db = await getDb();
+    expect(db.objectStoreNames).toContain('images');
+    expect([...db.transaction('images').objectStore('images').indexNames]).toEqual(['by-document']);
+    // Empty, and that is correct: a v1 library has no pictures and every one
+    // of its documents keeps working.
+    expect(await db.getAll('images')).toEqual([]);
   });
 
   it('upgrades an existing v1 database without throwing', async () => {

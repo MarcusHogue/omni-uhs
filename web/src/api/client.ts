@@ -362,6 +362,32 @@ export const api = {
     return new Uint8Array(await response.arrayBuffer());
   },
 
+  /**
+   * The bytes of one wiki picture.
+   *
+   * The URL comes from the wiki's own `imageinfo`, and the proxy checks it
+   * against that wiki's image hosts before fetching anything — a URL from
+   * anywhere else is refused there, not here.
+   */
+  async wikiImage(
+    host: string,
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<{ bytes: Uint8Array; mime: string }> {
+    const response = await fetch(
+      `/api/wiki/${encodeURIComponent(host)}/image?url=${encodeURIComponent(url)}`,
+      { signal },
+    );
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new ApiError(body.error ?? `Image failed (${response.status})`, response.status);
+    }
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      mime: response.headers.get('content-type')?.split(';')[0] ?? 'application/octet-stream',
+    };
+  },
+
   async ifArchiveFile(path: string, signal?: AbortSignal): Promise<Uint8Array> {
     const response = await fetch(`/api/ifarchive/${path.replace(/^\/+/, '')}`, { signal });
     if (!response.ok) throw new ApiError(`Download failed (${response.status})`, response.status);

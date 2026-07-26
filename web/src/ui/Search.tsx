@@ -352,21 +352,31 @@ function ResultRow({
     downloaded ? 'done' : 'idle',
   );
   const [message, setMessage] = useState<string | null>(null);
+  const [progress, setProgress] = useState<string | null>(null);
   const navigate = useNavigate();
   const external = externalUrl(entry);
 
   const download = async (): Promise<void> => {
     setState('working');
     setMessage(null);
+    setProgress(null);
     try {
       const decodeIncentive = await getSetting('decodeIncentive', false);
-      const { stored, warnings } = await downloadEntry(entry, { decodeIncentive });
+      const { stored, warnings } = await downloadEntry(entry, {
+        decodeIncentive,
+        // A wiki game fetches sixty pages and then a few hundred pictures, two
+        // at a time, behind one button. Without this it reads as a hang.
+        onProgress: (phase, done, total) =>
+          setProgress(`${phase === 'pages' ? 'Pages' : 'Images'} ${done}/${total}`),
+      });
       setState('done');
+      setProgress(null);
       if (warnings.length > 0) setMessage(`${warnings.length} parser note(s)`);
       onDownloaded();
       navigate(`/read/${encodeURIComponent(stored.id)}`);
     } catch (error) {
       setState('error');
+      setProgress(null);
       setMessage((error as Error).message);
     }
   };
@@ -379,6 +389,11 @@ function ResultRow({
           <span className="muted">{describe(entry)}</span>
           {downloaded && <span className="pill pill-offline">Available offline</span>}
         </span>
+        {progress && (
+          <span className="muted" role="status">
+            {progress}
+          </span>
+        )}
         {message && <span className={state === 'error' ? 'error' : 'muted'}>{message}</span>}
         {state === 'error' && external && (
           <a className="link-out" href={external} target="_blank" rel="noreferrer noopener">

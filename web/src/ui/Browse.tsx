@@ -298,6 +298,7 @@ function BrowseRow({
   onDownloaded: () => void;
 }): JSX.Element {
   const [working, setWorking] = useState(false);
+  const [progress, setProgress] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const navigate = useNavigate();
 
@@ -318,6 +319,11 @@ function BrowseRow({
             personalUseOnly={entry.meta.personalUseOnly ?? false}
           />
         )}
+        {progress && (
+          <span className="muted" role="status">
+            {progress}
+          </span>
+        )}
         {error && <span className="error">{error}</span>}
       </div>
       <button
@@ -327,21 +333,30 @@ function BrowseRow({
         onClick={() => {
           setWorking(true);
           setError(null);
+          setProgress(null);
           void (async () => {
             try {
               const decodeIncentive = await getSetting('decodeIncentive', false);
-              const { stored } = await downloadEntry(entry, { decodeIncentive });
+              const { stored } = await downloadEntry(entry, {
+                decodeIncentive,
+                // Sixty pages then a few hundred pictures, two at a time. A
+                // button that says only "Downloading…" for a minute reads as a
+                // hang, and the natural response is to press it again.
+                onProgress: (phase, done, total) =>
+                  setProgress(`${phase === 'pages' ? 'Pages' : 'Images'} ${done}/${total}`),
+              });
               onDownloaded();
               navigate(`/read/${encodeURIComponent(stored.id)}`);
             } catch (caught) {
               setError((caught as Error).message);
             } finally {
               setWorking(false);
+              setProgress(null);
             }
           })();
         }}
       >
-        {working ? 'Downloading…' : downloaded ? 'Re-download' : 'Download'}
+        {working ? progress ?? 'Downloading…' : downloaded ? 'Re-download' : 'Download'}
       </button>
     </li>
   );

@@ -2,14 +2,18 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import type { HintGroupNode, ImageNode, Inline, Node, TextNode } from '../parser/ast';
+import { api } from '../api/client';
 import {
   getDocument,
+  getImage,
   getRevealState,
   setRevealed,
   clearRevealState,
   type StoredDocument,
 } from '../storage/db';
+import { resolveImages } from '../storage/images';
 import { SourceBadge, Spinner } from './bits';
+import { useOnline } from './hooks';
 import { buildIndex, displayChildren, pathTo, searchLabels, unwrap } from './tree';
 
 export function Reader(): JSX.Element {
@@ -178,6 +182,7 @@ export function Reader(): JSX.Element {
           revealed={revealed}
           onReveal={reveal}
           onNavigate={go}
+          {...(wikiHostOf(stored) ? { wikiHost: wikiHostOf(stored) } : {})}
           onResetReveals={() => {
             void clearRevealState(documentId).then(() => setRevealedState({}));
           }}
@@ -193,6 +198,23 @@ interface ViewProps {
   onReveal: (groupId: string, count: number) => void;
   onNavigate: (id: string) => void;
   onResetReveals: () => void;
+  /** Which wiki this document came from, for fetching a picture at full size. */
+  wikiHost?: string;
+}
+
+/**
+ * The wiki a document came from, or undefined for the file-based sources.
+ *
+ * Read from the stored source URL rather than kept as a field: the URL is the
+ * thing the download actually recorded, and a second copy could disagree with it.
+ */
+function wikiHostOf(stored: StoredDocument): string | undefined {
+  if (stored.sourceKind !== 'fandom' && stored.sourceKind !== 'wikigg') return undefined;
+  try {
+    return new URL(stored.sourceUrl).hostname;
+  } catch {
+    return undefined;
+  }
 }
 
 function NodeView(props: ViewProps): JSX.Element {
@@ -288,6 +310,7 @@ function HintsView({
   revealed,
   onReveal,
   onNavigate,
+  wikiHost,
 }: ViewProps & { group: HintGroupNode }): JSX.Element {
   const id = group.id ?? '';
   const shown = Math.min(revealed[id] ?? 0, group.hints.length);
@@ -321,6 +344,18 @@ function HintsView({
                   ))}
                 </ul>
               )}
+              {/*
+                Inside the revealed <li>, deliberately. The picture is often the
+                answer itself — a scan of an in-game document — so it must not
+                be on screen until this hint has been tapped open.
+              */}
+              {hint.images?.map((image, n) => (
+                <ImageFigure
+                  key={image.id ?? n}
+                  node={image}
+                  {...(wikiHost ? { host: wikiHost } : {})}
+                />
+              ))}
             </div>
           </li>
         ))}
@@ -363,6 +398,129 @@ function TextView({
   );
 }
 
+/**
+ * Bytes to a displayable URL.
+ *
+ * A blob URL keeps the bytes out of the DOM as base64 and is revoked on unmount
+ * so the memory goes back. Empty input gives null and not an empty blob:
+ * `new Blob([new Uint8Array()])` renders as a broken-image icon, which is
+ * exactly what every wiki picture would have done, since their bytes live in
+ * the `images` store and never in the node.
+ */
+function useBlobUrl(bytes: Uint8Array | null, mime: string): string | null {
+  const [url, setUrl] = useState<string | null>(null);
+  useEffect(() => {
+    if (!bytes || bytes.length === 0) {
+      setUrl(null);
+      return;
+    }
+    const objectUrl = URL.createObjectURL(new Blob([bytes as BlobPart], { type: mime }));
+    setUrl(objectUrl);
+    return () => URL.revokeObjectURL(objectUrl);
+  }, [bytes, mime]);
+  return url;
+}
+
+/**
+ * A picture attached to a hint.
+ *
+ * Three states, and the third is the one worth being careful about: a picture
+ * that was not stored still shows its caption and a way to reach it. On a Blue
+ * Prince puzzle the caption is "Solution to the Antechamber door", so a silent
+ * gap there is the difference between an answer and a dead end.
+ */
+function ImageFigure({ node, host }: { node: ImageNode; host?: string }): JSX.Element {
+  const [bytes, setBytes] = useState<Uint8Array | null>(
+    node.data.length > 0 ? node.data : null,
+  );
+  const [mime, setMime] = useState(node.mime);
+  const [full, setFull] = useState<'idle' | 'loading' | 'shown' | 'failed'>('idle');
+  const [error, setError] = useState('');
+  const online = useOnline();
+  const url = useBlobUrl(bytes, mime);
+  const file = node.source?.file;
+
+  useEffect(() => {
+    if (node.data.length > 0 || !node.blobKey) return;
+    let cancelled = false;
+    void getImage(node.blobKey).then((stored) => {
+      if (cancelled || !stored) return;
+      setBytes(stored.bytes);
+      setMime(stored.mime);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [node]);
+
+  const showFullSize = async (): Promise<void> => {
+    if (!host || !file) return;
+    setFull('loading');
+    setError('');
+    try {
+      // The original's URL is not stored — only the wiki's own file title is,
+      // and MediaWiki's URLs carry a cache-busting parameter that would go
+      // stale. So it is resolved now, which also means "full size" really is
+      // whatever the wiki holds today.
+      const info = await resolveImages(host, [file], 10_000);
+      const found = info.get(file);
+      if (!found) throw new Error('the wiki no longer has this file');
+      const fetched = await api.wikiImage(host, found.url);
+      setBytes(fetched.bytes);
+      setMime(fetched.mime);
+      setFull('shown');
+    } catch (caught) {
+      setError((caught as Error).message);
+      setFull('failed');
+    }
+  };
+
+  const omitted = node.source?.omitted;
+
+  return (
+    <figure className="hint-image">
+      {url ? (
+        <img src={url} alt={node.label} loading="lazy" />
+      ) : (
+        <div className="image-missing">
+          {omitted === 'decorative'
+            ? 'Not downloaded — too small to be anything but decoration.'
+            : omitted === 'budget'
+              ? 'Not downloaded — this game hit its image budget.'
+              : 'Not downloaded.'}
+        </div>
+      )}
+      <figcaption>
+        {node.label}
+        {host && file && (
+          <>
+            {' '}
+            {full === 'shown' ? (
+              <span className="muted">· full size</span>
+            ) : (
+              <button
+                type="button"
+                className="linkish"
+                disabled={!online || full === 'loading'}
+                onClick={() => void showFullSize()}
+                title={
+                  online
+                    ? 'Fetch the original from the wiki'
+                    : 'Needs a connection — only the stored copy is available offline'
+                }
+              >
+                {full === 'loading' ? '· fetching…' : url ? '· View full size' : '· Fetch it'}
+              </button>
+            )}
+            {!online && <span className="muted"> · offline</span>}
+            {full === 'failed' && <span className="error-inline"> · {error}</span>}
+          </>
+        )}
+      </figcaption>
+    </figure>
+  );
+}
+
 function ImageView({
   node,
   onNavigate,
@@ -370,18 +528,10 @@ function ImageView({
   node: ImageNode;
   onNavigate: (id: string) => void;
 }): JSX.Element {
-  const [url, setUrl] = useState<string | null>(null);
   const [natural, setNatural] = useState<{ width: number; height: number } | null>(null);
+  const url = useBlobUrl(node.data, node.mime);
 
-  useEffect(() => {
-    // A blob URL keeps the bytes out of the DOM as base64 and is revoked on
-    // unmount so the memory goes back.
-    const blob = new Blob([node.data as BlobPart], { type: node.mime });
-    const objectUrl = URL.createObjectURL(blob);
-    setUrl(objectUrl);
-    setNatural(null);
-    return () => URL.revokeObjectURL(objectUrl);
-  }, [node]);
+  useEffect(() => setNatural(null), [node]);
 
   const hotspots = node.hotspots ?? [];
 
