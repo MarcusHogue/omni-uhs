@@ -59,6 +59,21 @@ export interface DiscoveryResult {
   probed: string[];
 }
 
+/** What the registry is offering, per image. */
+export interface ImageRelease {
+  name: string;
+  reference: string;
+  available: string | null;
+  error?: string;
+}
+
+export interface ReleaseStatus {
+  enabled: boolean;
+  running: string;
+  images: ImageRelease[];
+  checkedAt: string | null;
+}
+
 export interface SourceInfo {
   kind: SourceKind;
   enabledByDefault: boolean;
@@ -223,6 +238,11 @@ export const api = {
     const params = new URLSearchParams({ q: query });
     if (sources && sources.length > 0) params.set('sources', sources.join(','));
     return getJson<SearchResponse>(`/api/catalog/search?${params}`, signal);
+  },
+
+  /** Whether the registry holds a newer image than the one running. */
+  release(signal?: AbortSignal): Promise<ReleaseStatus> {
+    return getJson<ReleaseStatus>('/api/release', signal);
   },
 
   sources(signal?: AbortSignal): Promise<{ sources: SourceInfo[] }> {

@@ -66,6 +66,24 @@ jobs:
           # running, and notice when the browser and the proxy disagree.
           build-args: |
             APP_VERSION=${{ steps.ns.outputs.short }}
+          # And declared as labels, which is how the *registry* can be asked
+          # what a published image is without pulling it. A build arg cannot
+          # serve that: the web image's runtime stage is stock Caddy, so it
+          # carries no APP_VERSION at all -- the version lives inside its JS
+          # bundle, which nothing outside the container can read.
+          #
+          # `com.omni-uhs.build` is what the update check reads, and it is
+          # deliberately not one of the standard names. Labels are inherited
+          # from the base image, so reading org.opencontainers.image.version
+          # off the web image returns Caddy's version -- v2.11.4 -- with every
+          # appearance of being ours. A private key cannot be inherited by
+          # accident. The standard labels are set too, for `docker inspect` and
+          # for GHCR's "linked repository" panel.
+          labels: |
+            com.omni-uhs.build=${{ steps.ns.outputs.short }}
+            org.opencontainers.image.version=${{ steps.ns.outputs.short }}
+            org.opencontainers.image.revision=${{ github.sha }}
+            org.opencontainers.image.source=${{ github.server_url }}/${{ github.repository }}
           # `latest` for `docker compose pull`; the full and short SHA so a bad
           # deploy can be rolled back to a specific build by either name.
           tags: |

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react';
 
 import { api, isOfflineError, type WikiSite } from '../api/client';
 import {
@@ -332,6 +332,20 @@ export function Settings(): JSX.Element {
               <dd className="mono">
                 {update.state.proxyVersion ?? (online ? 'not reachable' : 'offline')}
               </dd>
+              {/* What the registry holds, per image, because the two publish
+                  independently and can genuinely differ. */}
+              {update.state.release?.images.map((image) => (
+                <Fragment key={image.name}>
+                  <dt>Published {image.name}</dt>
+                  {/* A version is mono; a failure is a sentence, and `.mono`
+                      does not wrap, so it would run off the side. */}
+                  {image.available ? (
+                    <dd className="mono">{image.available}</dd>
+                  ) : (
+                    <dd className="muted">{image.error ?? 'unknown'}</dd>
+                  )}
+                </Fragment>
+              ))}
             </dl>
             {update.state.reason === 'service-worker' && (
               <div className="warnings-box">
@@ -356,6 +370,36 @@ export function Settings(): JSX.Element {
                 <button type="button" onClick={update.apply}>
                   Reload
                 </button>
+              </div>
+            )}
+            {update.state.reason === 'registry-release' && (
+              <div className="warnings-box">
+                <strong>
+                  A newer build has been published: {update.state.release?.version ?? 'unknown'}.
+                </strong>
+                <p>
+                  This one is not in the browser&rsquo;s hands — the images on the host are
+                  still the older build, so there is nothing here to reload. Pull them
+                  where the stack runs:
+                </p>
+                <p>
+                  <code>docker compose pull &amp;&amp; docker compose up -d</code>
+                </p>
+                <p className="muted">
+                  {update.state.release?.behind.length === 1
+                    ? `The ${update.state.release.behind[0]} image is behind.`
+                    : 'Both images are behind.'}{' '}
+                  {(update.state.release?.unknown.length ?? 0) > 0 && (
+                    <>
+                      The {update.state.release!.unknown.join(' and ')} image
+                      {update.state.release!.unknown.length === 1 ? ' does' : 's do'} not report
+                      a version, so nothing was compared for{' '}
+                      {update.state.release!.unknown.length === 1 ? 'it' : 'them'}.{' '}
+                    </>
+                  )}
+                  On a Synology, Container Manager &rarr; Registry &rarr; pull{' '}
+                  <code>latest</code>, then rebuild the project.
+                </p>
               </div>
             )}
             {update.state.reason === null &&

@@ -53,8 +53,16 @@ export function App(): JSX.Element {
           <span>
             {update.state.reason === 'service-worker'
               ? 'A new version is ready.'
-              : 'The server is running a different version.'}
+              : update.state.reason === 'registry-release'
+                ? `Build ${update.state.release?.version ?? 'unknown'} is available to pull.`
+                : 'The server is running a different version.'}
           </span>
+          {/*
+            Only the service-worker case has anything to do in the browser. A
+            published build needs a `docker compose pull` on the host, so
+            offering a Reload button here would be a button that does nothing —
+            the same trap the mismatch case fell into once already.
+          */}
           {update.state.reason === 'service-worker' ? (
             <button type="button" className="linkish update-action" onClick={update.apply}>
               Reload
