@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Cache } from '../src/cache/index.js';
 import { parseMasterIndex } from '../src/catalog/ifarchive.js';
@@ -10,6 +10,7 @@ import { parseIfdbSearch } from '../src/catalog/ifdb.js';
 import { parseAllPages, parseRightsInfo, parseWikiSearch, apiUrl } from '../src/catalog/mediawiki.js';
 import { NORMALIZE_VECTORS, normalizeTitle } from '../src/catalog/normalize.js';
 import { describeSources, groupEntries } from '../src/catalog/search.js';
+import { describeWiki, kindForHost, resetWikiRegistry, siteTarget } from '../src/catalog/wikis.js';
 import type { CatalogEntry } from '../src/catalog/types.js';
 import { parseIndexHtml, parseUpdateCgi, searchUhsCatalog } from '../src/catalog/uhs.js';
 
@@ -368,5 +369,164 @@ describe('source advertisement', () => {
     expect(describeSources().filter((source) => source.enabledByDefault).map((s) => s.kind)).toEqual(
       ['uhs', 'ifarchive', 'ifdb'],
     );
+  });
+});
+
+describe('wiki registry', () => {
+  it('routes a host to the right source', () => {
+    expect(kindForHost('blue-prince.fandom.com')).toBe('fandom');
+    expect(kindForHost('animalwell.wiki.gg')).toBe('wikigg');
+    expect(kindForHost('strategywiki.org')).toBe('strategywiki');
+    expect(kindForHost('example.com')).toBeNull();
+    // Not a suffix match on a lookalike: `notfandom.com` must not pass.
+    expect(kindForHost('notfandom.com')).toBeNull();
+  });
+
+  it('builds the api URL from what the wiki reported, not from its hostname', () => {
+    // The bug this replaces: every non-Fandom host was sent to /w/api.php,
+    // which 404s on wiki.gg. Both platforms report an empty scriptpath.
+    const target = siteTarget({
+      host: 'animalwell.wiki.gg',
+      kind: 'wikigg',
+      sitename: 'Animal Well Wiki',
+      scriptPath: '',
+      articlePath: '/wiki/$1',
+      license: 'CC-BY-SA-4.0',
+      licenseUrl: 'https://creativecommons.org/licenses/by-sa/4.0',
+      personalUseOnly: false,
+      gamepedia: false,
+    });
+    expect(target.api).toBe('https://animalwell.wiki.gg/api.php');
+    expect(target.pageBase).toBe('https://animalwell.wiki.gg/wiki/');
+    // Carries its own allowlist, or every fetch is rejected as off-list.
+    expect(target.allowlist).toEqual(['animalwell.wiki.gg']);
+  });
+
+  it('honours a non-empty script path, as a self-hosted MediaWiki has', () => {
+    const target = siteTarget({
+      host: 'wiki.example.test',
+      kind: 'fandom',
+      sitename: 'Example',
+      scriptPath: '/w',
+      articlePath: '/wiki/$1',
+      license: 'CC-BY-SA',
+      licenseUrl: '',
+      personalUseOnly: false,
+      gamepedia: false,
+    });
+    expect(target.api).toBe('https://wiki.example.test/w/api.php');
+  });
+
+  describe('describeWiki', () => {
+    let dir: string;
+    let cache: Cache;
+
+    /** Answer any siteinfo call with one payload, and count the calls. */
+    const stubSiteinfo = (payload: unknown): { calls: () => number } => {
+      const fetch = vi
+        .spyOn(cache, 'fetch')
+        .mockResolvedValue({ path: '', contentType: 'application/json' } as never);
+      vi.spyOn(cache, 'readText').mockResolvedValue(JSON.stringify(payload));
+      return { calls: () => fetch.mock.calls.length };
+    };
+
+    beforeEach(() => {
+      dir = mkdtempSync(join(tmpdir(), 'hint-wikis-'));
+      cache = new Cache(dir);
+      // The table is created once per process; a fresh Cache needs it again.
+      resetWikiRegistry();
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+      cache.close();
+      rmSync(dir, { recursive: true, force: true });
+    });
+
+    it('records what the wiki says about itself, and asks only once', async () => {
+      const stub = stubSiteinfo({
+        query: {
+          general: {
+            sitename: 'Animal Well Wiki',
+            scriptpath: '',
+            articlepath: '/wiki/$1',
+          },
+          rightsinfo: {
+            text: 'Creative Commons Attribution-ShareAlike 4.0',
+            url: 'https://creativecommons.org/licenses/by-sa/4.0/',
+          },
+        },
+      });
+
+      const site = await describeWiki(cache, 'animalwell.wiki.gg');
+      expect(site).toMatchObject({
+        host: 'animalwell.wiki.gg',
+        kind: 'wikigg',
+        sitename: 'Animal Well Wiki',
+        articlePath: '/wiki/$1',
+        license: 'CC-BY-SA-4.0',
+        personalUseOnly: false,
+      });
+
+      // Second lookup comes from SQLite: a script path is not worth a round trip
+      // on every request, and a wiki that is down must not become unusable.
+      await describeWiki(cache, 'animalwell.wiki.gg');
+      expect(stub.calls()).toBe(1);
+    });
+
+    it('marks an NC wiki personal-use-only', async () => {
+      stubSiteinfo({
+        query: {
+          general: { sitename: 'Terraria Wiki', scriptpath: '', articlepath: '/wiki/$1' },
+          rightsinfo: {
+            text: 'Creative Commons Attribution-NonCommercial-ShareAlike 4.0',
+            url: 'https://creativecommons.org/licenses/by-nc-sa/4.0/',
+          },
+        },
+      });
+      const site = await describeWiki(cache, 'terraria.wiki.gg');
+      expect(site.personalUseOnly).toBe(true);
+    });
+
+    it('reports Fandom’s gamepedia flag, which arrives as a string', async () => {
+      stubSiteinfo({
+        query: {
+          general: {
+            sitename: 'Terraria Wiki',
+            scriptpath: '',
+            articlepath: '/wiki/$1',
+            gamepedia: 'true',
+          },
+          rightsinfo: { text: 'CC BY-SA', url: '' },
+        },
+      });
+      expect((await describeWiki(cache, 'terraria.fandom.com')).gamepedia).toBe(true);
+    });
+
+    it('refuses a host that belongs to no known platform', async () => {
+      await expect(describeWiki(cache, 'evil.example.com')).rejects.toThrow(/not a recognised/);
+    });
+  });
+
+  it('stamps the wiki host onto entries so a result says where it came from', () => {
+    const json = JSON.stringify({ query: { search: [{ title: 'Room 46' }] } });
+    const target = siteTarget({
+      host: 'blue-prince.fandom.com',
+      kind: 'fandom',
+      sitename: 'Blue Prince Wiki',
+      scriptPath: '',
+      articlePath: '/wiki/$1',
+      license: 'CC-BY-SA',
+      licenseUrl: '',
+      personalUseOnly: false,
+      gamepedia: false,
+    });
+    expect(parseWikiSearch(json, 'fandom', target)[0]).toMatchObject({
+      sourceKind: 'fandom',
+      ref: 'Room 46',
+      host: 'blue-prince.fandom.com',
+    });
+    // Single-host sources stay clean: no host field where it would be noise.
+    expect(parseWikiSearch(json, 'strategywiki')[0]!.host).toBeUndefined();
   });
 });

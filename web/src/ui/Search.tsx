@@ -15,6 +15,7 @@ import { downloadEntry } from '../storage/download';
 import { getSetting } from '../storage/db';
 import { ErrorNote, SOURCE_LABELS, SourceBadge, Spinner, Warnings } from './bits';
 import { useDebounced, useLatest, useLibrary, useOfflineRefs, useOnline } from './hooks';
+import { refUrl, wikiPageUrl } from './refs';
 
 /**
  * Chips to show before `/api/catalog/sources` answers — and if it never does.
@@ -35,6 +36,15 @@ const DEBOUNCE_MS = 400;
 
 const defaultsOf = (sources: SourceInfo[]): SourceKind[] =>
   sources.filter((source) => source.enabledByDefault).map((source) => source.kind);
+
+/**
+ * A wiki platform with nothing in `WIKI_ALLOWLIST` can only ever return
+ * nothing — it is hundreds of sites and the server has been given none of them.
+ * The chip stays visible so the feature is discoverable, but switching it on
+ * would be a lie, so it is disabled and says why.
+ */
+const unconfigured = (source: SourceInfo): boolean =>
+  (source.kind === 'fandom' || source.kind === 'wikigg') && (source.hosts?.length ?? 0) === 0;
 
 export function Search(): JSX.Element {
   const [query, setQuery] = useState('');
@@ -154,13 +164,18 @@ export function Search(): JSX.Element {
       <div className="chips" role="group" aria-label="Filter by source">
         {sources.map((source) => {
           const active = selected.includes(source.kind);
+          const disabled = unconfigured(source);
+          const title = disabled
+            ? `No ${SOURCE_LABELS[source.kind]} wikis are allowlisted. Add one to WIKI_ALLOWLIST.`
+            : source.note;
           return (
             <button
               key={source.kind}
               type="button"
               className={active ? 'chip chip-on' : 'chip'}
               aria-pressed={active}
-              {...(source.note ? { title: source.note } : {})}
+              disabled={disabled}
+              {...(title ? { title } : {})}
               onClick={() => {
                 touchedChips.current = true;
                 setSelected((current) =>
@@ -278,6 +293,10 @@ function describe(entry: CatalogEntry): string {
     parts.push(entry.ref.split('/').pop() ?? entry.ref);
   } else if (entry.sourceKind === 'strategywiki') {
     parts.push(entry.ref);
+  } else if (entry.host) {
+    // The group heading is the game; what distinguishes rows is which wiki.
+    parts.push(entry.host.replace(/\.(fandom\.com|wiki\.gg)$/, ''));
+    parts.push(entry.ref);
   } else {
     parts.push(entry.title);
   }
@@ -297,20 +316,8 @@ function describe(entry: CatalogEntry): string {
 function externalUrl(entry: CatalogEntry): string | null {
   if (entry.sourceKind === 'ifdb') return `https://ifdb.org/viewgame?id=${entry.ref}`;
   if (entry.sourceKind === 'strategywiki') return strategyWikiPageUrl(entry.ref);
+  if (entry.host) return wikiPageUrl(entry.host, entry.ref);
   return null;
-}
-
-/** The URL form a stored document records, so downloads can be matched. */
-function refUrl(entry: CatalogEntry): string {
-  if (entry.sourceKind === 'ifarchive') {
-    return `https://ifarchive.org/${entry.ref.replace(/^\/+/, '')}`;
-  }
-  if (entry.sourceKind === 'strategywiki') {
-    return `https://strategywiki.org/wiki/${encodeURIComponent(
-      entry.ref.split('/')[0]!.replace(/ /g, '_'),
-    )}`;
-  }
-  return entry.ref;
 }
 
 function ResultRow({

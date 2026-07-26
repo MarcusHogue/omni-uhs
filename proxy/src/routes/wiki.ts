@@ -17,6 +17,7 @@ import { config } from '../config.js';
 import { getCache } from '../cache/index.js';
 import { IFDB_BASE } from '../catalog/ifdb.js';
 import { STRATEGYWIKI, apiUrl, fetchRightsInfo } from '../catalog/mediawiki.js';
+import { describeWiki, targetFor } from '../catalog/wikis.js';
 import { assertAllowed } from '../upstream/allowlist.js';
 
 /** Only read actions are proxied; nothing may write to a wiki. */
@@ -60,6 +61,22 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(info);
   });
 
+  /**
+   * What we know about an allowlisted wiki: its name, its licence, and whether
+   * that licence makes it personal-use-only. The generic replacement for
+   * `/api/strategywiki/license`, which only ever worked for one site.
+   */
+  app.get('/api/wiki/:host/site', async (request, reply) => {
+    const { host } = request.params as { host: string };
+    if (!config.wikiAllowlist.includes(host.toLowerCase())) {
+      return reply.code(400).send({
+        error: `wiki host not allowed: ${host}`,
+        hint: 'add it to WIKI_ALLOWLIST',
+      });
+    }
+    return reply.send(await describeWiki(getCache(), host.toLowerCase()));
+  });
+
   app.get('/api/wiki/:host', async (request, reply) => {
     const { host } = request.params as { host: string };
     if (!config.wikiAllowlist.includes(host.toLowerCase())) {
@@ -69,16 +86,16 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
       });
     }
     const params = validateParams(request.query as Record<string, unknown>);
-    // Fandom serves api.php at the root; wiki.gg and MediaWiki proper use /w/.
-    const api = host.endsWith('.fandom.com')
-      ? `https://${host}/api.php`
-      : `https://${host}/w/api.php`;
 
+    // The api.php path is read from the wiki itself rather than guessed. The
+    // guess used to be "Fandom is /api.php, everyone else /w/api.php", which
+    // 404s on every wiki.gg wiki and on Fandom's language wikis.
     const cache = getCache();
+    const target = await targetFor(cache, host.toLowerCase());
     const entry = await cache.fetch({
-      url: apiUrl(api, params),
+      url: apiUrl(target.api, params),
       ttl: config.ttl.wiki,
-      allowlist: [host.toLowerCase()],
+      allowlist: target.allowlist ?? [host.toLowerCase()],
       accept: 'application/json',
     });
     return reply

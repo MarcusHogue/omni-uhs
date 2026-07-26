@@ -107,6 +107,9 @@ export async function downloadEntry(
       return downloadIfArchive(entry, options);
     case 'strategywiki':
       return downloadStrategyWiki(entry, options);
+    case 'fandom':
+    case 'wikigg':
+      return downloadWiki(entry, options);
     case 'ifdb':
       throw new Error(
         'IFDB is a metadata catalogue, not a hint source — use the IF Archive or UHS entry for this game.',
@@ -174,6 +177,13 @@ async function downloadIfArchive(
   return { stored, warnings: result.warnings };
 }
 
+/** One page's wikitext, as handed to the parser. */
+interface WikiPageContent {
+  title: string;
+  wikitext: string;
+  revision: string | null;
+}
+
 interface WikiRevisionsResponse {
   query?: {
     pages?: {
@@ -205,15 +215,13 @@ async function downloadStrategyWiki(
     options.signal,
   );
 
-  const pages = [gameTitle, ...(index.query?.allpages ?? []).map((p) => p.title ?? '')]
+  const titles = [gameTitle, ...(index.query?.allpages ?? []).map((p) => p.title ?? '')]
     .filter(Boolean)
     // Skip the noise: table-of-contents pages duplicate the tree we build.
     .filter((title) => !/\/(Table[ _]of[ _]Contents)$/i.test(title));
 
-  const fetched: { title: string; wikitext: string; revision: string | null }[] = [];
-  // Serial, as MediaWiki asks (spec §6.3).
-  for (const title of pages) {
-    const response = await api.strategyWiki<WikiRevisionsResponse>(
+  const fetched = await fetchPages(titles, (title) =>
+    api.strategyWiki<WikiRevisionsResponse>(
       {
         action: 'query',
         prop: 'revisions',
@@ -222,7 +230,33 @@ async function downloadStrategyWiki(
         rvprop: 'content|ids',
       },
       options.signal,
-    );
+    ),
+  );
+
+  if (fetched.length === 0) throw new Error(`No StrategyWiki pages found for "${gameTitle}".`);
+
+  // StrategyWiki is written as a walkthrough with its answers already behind
+  // spoiler templates, so its pages are kept as they read.
+  const result = parseWikiWalkthrough(fetched, {
+    kind: 'strategywiki',
+    gameTitle,
+    baseUrl: 'https://strategywiki.org/wiki/',
+    license: 'CC-BY-SA-4.0',
+    personalUseOnly: false,
+    reveal: 'as-written',
+  });
+
+  return storeWiki(result, fetched);
+}
+
+/** Fetch each page's wikitext, serially, as MediaWiki asks (spec §6.3). */
+async function fetchPages(
+  titles: string[],
+  fetchOne: (title: string) => Promise<WikiRevisionsResponse>,
+): Promise<WikiPageContent[]> {
+  const fetched: WikiPageContent[] = [];
+  for (const title of titles) {
+    const response = await fetchOne(title);
     const page = response.query?.pages?.[0];
     if (!page || page.missing) continue;
     const revision = page.revisions?.[0];
@@ -232,22 +266,81 @@ async function downloadStrategyWiki(
       revision: revision?.revid !== undefined ? String(revision.revid) : null,
     });
   }
+  return fetched;
+}
 
-  if (fetched.length === 0) throw new Error(`No StrategyWiki pages found for "${gameTitle}".`);
-
-  const result = parseWikiWalkthrough(fetched, {
-    kind: 'strategywiki',
-    gameTitle,
-    baseUrl: 'https://strategywiki.org/wiki/',
-    license: 'CC-BY-SA-4.0',
-    personalUseOnly: false,
-  });
-
-  const stored = toStored(result, fetched.reduce((n, p) => n + p.wikitext.length, 0));
+async function storeWiki(
+  result: ReturnType<typeof parseWikiWalkthrough>,
+  fetched: WikiPageContent[],
+): Promise<DownloadResult> {
+  const stored = toStored(
+    result,
+    fetched.reduce((n, p) => n + p.wikitext.length, 0),
+  );
   await putDocument(stored, {
     id: stored.id,
     bytes: new TextEncoder().encode(JSON.stringify(fetched)),
     contentType: 'application/json',
   });
   return { stored, warnings: result.warnings };
+}
+
+/**
+ * Fandom and wiki.gg.
+ *
+ * Two things differ from StrategyWiki, and both matter:
+ *
+ * - **The licence is read, not assumed.** These are per-wiki, and plenty of the
+ *   game wikis are CC-BY-NC-SA, which has to set `personalUseOnly` and keep the
+ *   page out of a shareable export.
+ * - **The reveal is rebuilt.** A reference wiki marks nothing as an answer, so
+ *   rendering the page as written would spoil all of it at once. Sections
+ *   become questions and paragraphs become hints revealed one at a time.
+ */
+async function downloadWiki(
+  entry: CatalogEntry,
+  options: DownloadOptions,
+): Promise<DownloadResult> {
+  const host = entry.host;
+  if (!host) {
+    throw new Error(`This ${entry.sourceKind} result does not say which wiki it came from.`);
+  }
+
+  const site = await api.wikiSite(host, options.signal);
+  const pageTitle = entry.ref;
+
+  const fetched = await fetchPages([pageTitle], (title) =>
+    api.wiki<WikiRevisionsResponse>(
+      host,
+      {
+        action: 'query',
+        prop: 'revisions',
+        titles: title,
+        rvslots: 'main',
+        rvprop: 'content|ids',
+      },
+      options.signal,
+    ),
+  );
+
+  if (fetched.length === 0) throw new Error(`"${pageTitle}" was not found on ${host}.`);
+
+  const result = parseWikiWalkthrough(fetched, {
+    kind: entry.sourceKind,
+    gameTitle: pageTitle,
+    baseUrl: `https://${host}/wiki/`,
+    license: site.license,
+    personalUseOnly: site.personalUseOnly,
+    reveal: 'progressive',
+    skipReferencePages: true,
+  });
+
+  if (result.document.root.children.length === 0) {
+    throw new Error(
+      result.warnings[0] ??
+        `"${pageTitle}" has no readable guidance on it — it looks like a reference page.`,
+    );
+  }
+
+  return storeWiki(result, fetched);
 }

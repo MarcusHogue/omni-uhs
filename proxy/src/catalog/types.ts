@@ -16,6 +16,14 @@ export interface CatalogEntry {
   normalizedTitle: string;
   /** Source-specific: zip URL, wiki page name, IFDB TUID, archive path. */
   ref: string;
+  /**
+   * Which wiki this came from, for the multi-wiki sources.
+   *
+   * Fandom and wiki.gg are hundreds of independent wikis behind one source
+   * name, so `ref` (a page title) does not identify anything on its own.
+   * Unset for single-host sources, where it would be noise.
+   */
+  host?: string;
   meta?: { year?: number; platform?: string; complete?: boolean; size?: number; date?: string };
 }
 

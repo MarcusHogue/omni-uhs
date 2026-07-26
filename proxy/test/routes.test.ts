@@ -137,6 +137,17 @@ describe('/api/wiki/:host', () => {
     });
     expect(response.statusCode).toBe(400);
   });
+
+  // The allowlist is the only thing standing between "read a wiki" and "read
+  // anything", so it guards the metadata route too — not just the fetch.
+  it('rejects an off-list host on the site route as well', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/wiki/blue-prince.fandom.com.evil.example.com/site',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().hint).toMatch(/WIKI_ALLOWLIST/);
+  });
 });
 
 describe('/api/strategywiki', () => {
@@ -221,7 +232,16 @@ describe('/api/catalog/sources', () => {
       'ifarchive',
       'strategywiki',
       'ifdb',
+      'fandom',
+      'wikigg',
     ]);
+    // The wiki platforms are off by default: they do nothing until an operator
+    // puts a host in WIKI_ALLOWLIST.
+    for (const kind of ['fandom', 'wikigg']) {
+      const source = sources.find((s) => s.kind === kind)!;
+      expect(source.enabledByDefault).toBe(false);
+      expect(source.note).toMatch(/WIKI_ALLOWLIST/);
+    }
     const strategywiki = sources.find((source) => source.kind === 'strategywiki')!;
     expect(strategywiki.enabledByDefault).toBe(false);
     expect(strategywiki.note).toMatch(/Cloudflare/);
@@ -245,5 +265,21 @@ describe('/api/catalog/:source/list', () => {
   it('refuses a source with no browse listing', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/catalog/gamefaqs/list' });
     expect(response.statusCode).toBe(400);
+  });
+
+  // `:source` names a platform of hundreds of wikis, so it cannot say which one.
+  it('needs a host to browse a wiki platform', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/catalog/fandom/list' });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatch(/host is required/);
+  });
+
+  it('refuses to browse a wiki that is not allowlisted', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/catalog/wikigg/list?host=anything.wiki.gg',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().hint).toMatch(/WIKI_ALLOWLIST/);
   });
 });

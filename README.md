@@ -196,10 +196,46 @@ hammered, so everything goes through `proxy/`:
 | **IF Archive** | `indexes/Master-Index.xml` (~15 MB) is fetched daily and the hint-bearing subtrees indexed into SQLite. Includes InvisiClues transcriptions, which are already question → progressive answers. |
 | **IFDB** | Metadata and search. Cloudflare-fronted: it answers 403 without a real `User-Agent`, so the honest one is mandatory rather than merely polite. |
 | **StrategyWiki** | MediaWiki API, CC-BY-SA 4.0. Page URL and revision id are recorded and displayed. |
-| **Fandom / wiki.gg** | Route and per-wiki licence gating are in place (`WIKI_ALLOWLIST`); a `-NC` licence forces `personalUseOnly`. Not wired into search yet. |
+| **Fandom / wiki.gg** | Searchable, browsable and downloadable — but only for the wikis you name in `WIKI_ALLOWLIST`. Each is asked for its own script path and licence on first contact; a `-NC` licence forces `personalUseOnly`. Pages are re-shaped so answers reveal one at a time (see below), and reference pages are skipped. |
 
 GameFAQs, Neoseeker, Fextralife and Steam Guides are deliberately **not**
 implemented — all-rights-reserved or ToS-restricted.
+
+#### Reference wikis (Fandom, wiki.gg)
+
+Three things make these different from every other source here.
+
+**They are platforms, not sites.** Between them they host hundreds of thousands
+of wikis about everything — books, television, brands — and neither exposes a
+usable "games only" filter: Fandom's discovery API answers 403 to anything that
+is not a browser, its vertical parameter is gone, and wiki.gg has no index API
+at all. So the filter is you. Nothing is fetched from either platform until a
+host is named in `WIKI_ALLOWLIST`, one wiki at a time:
+
+```
+WIKI_ALLOWLIST=animalwell.wiki.gg,blue-prince.fandom.com
+```
+
+**They are reference works, not walkthroughs.** A wiki page states the answer
+in its first sentence and marks nothing as a spoiler, so rendering one as
+written would give away the puzzle you opened it to get a nudge on. Wiki pages
+are therefore re-shaped: each section heading becomes a question and its
+paragraphs become hints revealed one at a time, shortest first — the same
+progressive contract as a UHS file. A page that is mostly infobox and stat
+tables carries no guidance at all and is skipped with a warning rather than
+stored as a wall of parameters.
+
+**Their licences vary per wiki.** Each wiki is asked for its own on first
+contact and the answer is cached; `-NC` (common on ex-Gamepedia game wikis)
+marks everything from it `personalUseOnly`, which keeps it out of a shareable
+export while leaving it in a full backup. Attribution — page URL and revision
+id — is recorded either way.
+
+Fandom's terms are stricter on paper about automated retrieval than
+StrategyWiki's. What this does is personal-use, low-volume, cached, attributed
+reading of specific pages through the documented API, with an honest
+`User-Agent` — but it is worth knowing the difference rather than assuming
+every wiki has the same posture. Neither platform is crawled.
 
 ---
 

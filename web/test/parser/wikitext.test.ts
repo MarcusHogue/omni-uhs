@@ -2,7 +2,14 @@ import { describe, expect, it } from 'vitest';
 
 import type { HintGroupNode, SubjectNode, TextNode } from '../../src/parser/ast.js';
 import { inlineText, walk } from '../../src/parser/ast.js';
-import { parseWikiWalkthrough, splitSections, stripMarkup } from '../../src/parser/wikitext/index.js';
+import {
+  looksLikeReference,
+  parseWikiWalkthrough,
+  proseChars,
+  proseRatio,
+  splitSections,
+  stripMarkup,
+} from '../../src/parser/wikitext/index.js';
 
 const OPTIONS = {
   kind: 'strategywiki' as const,
@@ -102,6 +109,36 @@ Nothing to see yet.
     expect(plain).not.toContain('key is under the mat');
   });
 
+  it('keeps the word a one-parameter template stands in for', () => {
+    // Blue Prince writes "a very complex and long {{roomtype|Puzzle}};", which
+    // dropping the template turned into "a very complex and long ;".
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Room 46',
+          wikitext:
+            'It is a very complex and long {{roomtype|Puzzle}}; follow its page.\n' +
+            '\n' +
+            'Layout is {{Reflist|30em}}not prose{{clear}}, and ' +
+            '{{tooltip|shown|hovered}}has no obvious answer.\n',
+          revision: '1',
+        },
+      ],
+      { ...OPTIONS, kind: 'fandom', reveal: 'progressive' },
+    );
+    const said = [...walk(document.root)]
+      .filter((n): n is HintGroupNode => n.type === 'hints')
+      .flatMap((n) => n.hints.map((h) => inlineText(h.content)))
+      .join(' ');
+    expect(said).toContain('a very complex and long Puzzle;');
+    // Layout and multi-parameter templates stay dropped: a bare dimension is
+    // not prose, and which of two parameters is the display text is a guess.
+    expect(said).toContain('Layout is not prose,');
+    expect(said).not.toContain('30em');
+    expect(said).not.toContain('hovered');
+    expect(said).not.toContain('shown');
+  });
+
   it('records the attribution CC-BY-SA requires', () => {
     expect(document.source.license).toBe('CC-BY-SA-4.0');
     expect(document.source.revision).toBe('12345');
@@ -133,3 +170,191 @@ Nothing to see yet.
     ).not.toThrow();
   });
 });
+
+describe('reveal shape (spec §6.4)', () => {
+  // A reference wiki marks nothing as an answer, so "as written" would put the
+  // whole page on screen at once. That is the failure this guards.
+  const REFERENCE_PAGE = `
+Blue Prince is a puzzle game.
+
+== The antechamber ==
+Reach the antechamber with the correct keycard.
+
+Enter 46 on the keypad using the code from the study.
+
+The door opens onto the final room.
+`;
+
+  it('keeps StrategyWiki pages as written, revealed on arrival', () => {
+    const { document } = parseWikiWalkthrough(
+      [{ title: 'Test Game', wikitext: REFERENCE_PAGE, revision: '1' }],
+      OPTIONS,
+    );
+    const kinds = collectTypes(document.root);
+    expect(kinds).toContain('text');
+    expect(kinds).not.toContain('hints');
+  });
+
+  it('turns a reference page into hints that reveal one at a time', () => {
+    const { document } = parseWikiWalkthrough(
+      [{ title: 'Room 46', wikitext: REFERENCE_PAGE, revision: '1' }],
+      { ...OPTIONS, kind: 'fandom', baseUrl: 'https://blue-prince.fandom.com/wiki/', reveal: 'progressive' },
+    );
+    const kinds = collectTypes(document.root);
+    // No pre-revealed prose anywhere in the tree.
+    expect(kinds).not.toContain('text');
+    expect(kinds).toContain('hints');
+
+    // The section heading becomes the question, its paragraphs the steps.
+    const group = findHints(document.root, 'The antechamber')!;
+    expect(group).toBeTruthy();
+    expect(group.hints).toHaveLength(3);
+  });
+
+  it('does not make you tap through a section to reach its only hint group', () => {
+    const { document } = parseWikiWalkthrough(
+      [{ title: 'Room 46', wikitext: REFERENCE_PAGE, revision: '1' }],
+      { ...OPTIONS, kind: 'fandom', reveal: 'progressive' },
+    );
+    // "The antechamber" has no sub-headings, so its wrapper subject held one
+    // group with the identical label — two taps and the same word twice.
+    const child = document.root.children.find((node) => node.label === 'The antechamber');
+    expect(child?.type).toBe('hints');
+  });
+
+  it('keeps the wrapper when a section really does have sub-sections', () => {
+    const nested = `
+Intro prose long enough to count as a paragraph of guidance.
+
+== Puzzles ==
+Some general advice about the puzzles in this game.
+
+=== The keypad ===
+Enter the code from the study.
+`;
+    const { document } = parseWikiWalkthrough(
+      [{ title: 'Room 46', wikitext: nested, revision: '1' }],
+      { ...OPTIONS, kind: 'fandom', reveal: 'progressive' },
+    );
+    const puzzles = document.root.children.find((node) => node.label === 'Puzzles');
+    expect(puzzles?.type).toBe('subject');
+    // ...and the leaf below it is still collapsed.
+    const keypad = (puzzles as SubjectNode).children.find(
+      (node) => node.label === 'The keypad',
+    );
+    expect(keypad?.type).toBe('hints');
+  });
+
+  it('records Fandom attribution from the wiki it actually came from', () => {
+    const { document } = parseWikiWalkthrough(
+      [{ title: 'Room 46', wikitext: REFERENCE_PAGE, revision: '9912' }],
+      {
+        ...OPTIONS,
+        kind: 'fandom',
+        baseUrl: 'https://blue-prince.fandom.com/wiki/',
+        license: 'CC-BY-SA',
+        reveal: 'progressive',
+      },
+    );
+    expect(document.source.url).toContain('blue-prince.fandom.com');
+    expect(document.source.attribution).toContain('blue-prince.fandom.com');
+    expect(document.source.attribution).toContain('9912');
+  });
+
+  it('carries a non-commercial licence through as personal-use-only', () => {
+    // Terraria and Minecraft are CC-BY-NC-SA: the wikis most worth having are
+    // the ones that must never reach a shareable export.
+    const { document } = parseWikiWalkthrough(
+      [{ title: 'Wall of Flesh', wikitext: REFERENCE_PAGE, revision: '1' }],
+      {
+        ...OPTIONS,
+        kind: 'wikigg',
+        baseUrl: 'https://terraria.wiki.gg/wiki/',
+        license: 'CC-BY-NC-SA-4.0',
+        personalUseOnly: true,
+        reveal: 'progressive',
+      },
+    );
+    expect(document.source.personalUseOnly).toBe(true);
+  });
+});
+
+describe('reference-page classifier', () => {
+  const INFOBOX_PAGE = `{{npc infobox
+| boxwidth = 31em
+| auto = 113
+| name = Wall of Flesh
+| type = Boss
+| ai = Wall of Flesh AI
+| damage = 50
+| life = 8000
+| defense = 0
+| immune = confused, poisoned
+}}
+{| class="terraria"
+! Stat !! Value
+|-
+| Damage || 50
+|}
+The Wall of Flesh.`;
+
+  it('calls a stat page reference data and a guide not', () => {
+    expect(looksLikeReference(INFOBOX_PAGE)).toBe(true);
+    expect(
+      looksLikeReference('== Room 46 ==\nReach the antechamber and enter the code from the study.'),
+    ).toBe(false);
+  });
+
+  it('keeps a page that is mostly template but has real prose in it', () => {
+    // Blue Prince's Antechamber page is 11% prose and one of the most useful on
+    // that wiki. A ratio-only gate dropped it; that was the bug.
+    // Proportions taken from the real page: ~7.4k of template and table
+    // markup around ~800 characters of guidance.
+    const bulk = Array.from({ length: 300 }, (_, i) => `| field${i} = value ${i}`).join('\n');
+    const page = `{{room infobox\n${bulk}\n}}\n\n== Description ==\n${'Reaching the antechamber is the first major goal. '.repeat(17)}`;
+    expect(proseRatio(page)).toBeLessThan(0.15);
+    expect(proseChars(page)).toBeGreaterThan(300);
+    expect(looksLikeReference(page)).toBe(false);
+  });
+
+  it('skips reference pages when asked, and says which and why', () => {
+    const { document, warnings } = parseWikiWalkthrough(
+      [{ title: 'Wall of Flesh', wikitext: INFOBOX_PAGE, revision: '1' }],
+      { ...OPTIONS, kind: 'wikigg', reveal: 'progressive', skipReferencePages: true },
+    );
+    expect(document.root.children).toHaveLength(0);
+    expect(warnings.join(' ')).toMatch(/Wall of Flesh: skipped, reads as reference data/);
+  });
+
+  it('leaves the page alone when the classifier is off', () => {
+    const { document } = parseWikiWalkthrough(
+      [{ title: 'Wall of Flesh', wikitext: INFOBOX_PAGE, revision: '1' }],
+      { ...OPTIONS, kind: 'wikigg', reveal: 'progressive' },
+    );
+    expect(document.root.children.length).toBeGreaterThan(0);
+  });
+});
+
+/** Every node type present in the tree. */
+function collectTypes(node: { type: string; children?: unknown[] }): string[] {
+  const out = [node.type];
+  for (const child of (node.children ?? []) as { type: string; children?: unknown[] }[]) {
+    out.push(...collectTypes(child));
+  }
+  return out;
+}
+
+/** The hint group with a given label, anywhere in the tree. */
+function findHints(
+  node: { type: string; label?: string; children?: unknown[] },
+  label: string,
+): { label: string; hints: unknown[] } | null {
+  if (node.type === 'hints' && node.label === label) {
+    return node as unknown as { label: string; hints: unknown[] };
+  }
+  for (const child of (node.children ?? []) as { type: string; children?: unknown[] }[]) {
+    const found = findHints(child, label);
+    if (found) return found;
+  }
+  return null;
+}

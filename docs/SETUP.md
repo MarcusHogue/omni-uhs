@@ -52,6 +52,36 @@ It is sent to every upstream. uhs-hints.com has been dormant since ~2015 and
 IFDB rejects requests without a real User-Agent, so be identifiable and
 reachable. The other variables are documented in `.env.example`.
 
+### Adding a game wiki
+
+UHS, the IF Archive and IFDB work out of the box. Fandom and wiki.gg do not, on
+purpose: they are platforms hosting hundreds of thousands of wikis about
+everything, and neither offers a filter that would keep this to games. So you
+name the ones you want, and only those are ever contacted:
+
+```bash
+WIKI_ALLOWLIST=animalwell.wiki.gg,blue-prince.fandom.com
+SEARCH_SOURCES=uhs,ifarchive,ifdb,fandom,wikigg
+```
+
+The host is the one in the wiki's own URL — open the wiki and copy what is
+before the first `/`. Then `docker compose up -d` to restart the proxy, and the
+new chips appear in Search and new rows under Browse. Until a host is listed,
+the chips are visible but disabled and Browse says nothing is allowlisted.
+
+Each wiki is asked about itself on first contact — its name, its API path, and
+its licence. Browse shows all three above the listing, before you download
+anything, because the licence decides what you can do with the result: a
+`-NC` wiki (common on ex-Gamepedia game wikis such as Terraria's) marks
+everything from it **personal use only**, which keeps it out of a shareable
+export while leaving it in a full backup.
+
+Wiki pages are re-shaped on the way in rather than stored as written — sections
+become questions, paragraphs become hints revealed one at a time. A page that
+turns out to be all infobox and stat tables is refused with a note saying so,
+which is the expected outcome for a weapon or item page. Aim at the puzzle,
+secret and ending pages.
+
 ### Changing the port
 
 `docker-compose.local.yml` publishes `127.0.0.1:8081:80` — bound to loopback, so
@@ -334,6 +364,19 @@ publishes no index to page through.
 **Downloads fail with "not allowed".** The proxy enforces a hostname allowlist
 (`UPSTREAM_ALLOWLIST`). That is the SSRF boundary; add the host deliberately or
 not at all.
+
+**"wiki host not allowed".** A Fandom or wiki.gg host that is not in
+`WIKI_ALLOWLIST` — see §1. Note it is a separate list from
+`UPSTREAM_ALLOWLIST`: a wiki you add there is reachable only through
+`/api/wiki/:host`, never through the generic fetchers.
+
+**The Fandom or wiki.gg chip is greyed out.** No wikis are allowlisted for that
+platform, so searching it could only ever return nothing. §1 has the fix.
+
+**A wiki page refuses to download, saying it looks like a reference page.**
+Working as intended. That page is mostly infobox and stat tables, with no
+prose to turn into hints — normal for an item, weapon or character page. Puzzle,
+secret, boss and ending pages are the ones that carry guidance.
 
 **Nothing loads offline.** Confirm the service worker registered: DevTools →
 Application → Service Workers. It only registers over HTTPS or on `localhost`.

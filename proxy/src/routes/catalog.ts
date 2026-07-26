@@ -9,7 +9,9 @@ import type { FastifyInstance } from 'fastify';
 
 import { getCache } from '../cache/index.js';
 import { listIfArchive, refreshIfArchiveCatalog } from '../catalog/ifarchive.js';
+import { config } from '../config.js';
 import { STRATEGYWIKI, listWikiPages } from '../catalog/mediawiki.js';
+import { targetFor } from '../catalog/wikis.js';
 import {
   DEFAULT_SEARCH_SOURCES,
   SEARCHABLE_SOURCES,
@@ -93,6 +95,36 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
             challenged: (error as { upstreamChallenge?: boolean }).upstreamChallenge
               ? [source]
               : [],
+          });
+        }
+      }
+      case 'fandom':
+      case 'wikigg': {
+        // Which wiki has to come from a query parameter: `:source` names the
+        // platform, and a platform is hundreds of independent wikis.
+        const { host } = request.query as { host?: string };
+        if (!host) {
+          return reply
+            .code(400)
+            .send({ error: `host is required for ${source} (e.g. ?host=animalwell.wiki.gg)` });
+        }
+        if (!config.wikiAllowlist.includes(host.toLowerCase())) {
+          return reply
+            .code(400)
+            .send({ error: `wiki host not allowed: ${host}`, hint: 'add it to WIKI_ALLOWLIST' });
+        }
+        try {
+          const target = await targetFor(cache, host.toLowerCase());
+          return reply.send({
+            source,
+            entries: await listWikiPages(cache, target, prefix ?? ''),
+            warnings: [],
+          });
+        } catch (error) {
+          return reply.send({
+            source,
+            entries: [],
+            warnings: [`${host}: ${(error as Error).message}`],
           });
         }
       }

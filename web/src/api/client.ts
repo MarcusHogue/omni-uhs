@@ -12,6 +12,8 @@ export interface CatalogEntry {
   title: string;
   normalizedTitle: string;
   ref: string;
+  /** Which wiki, for the multi-wiki sources. Unset elsewhere. */
+  host?: string;
   meta?: { year?: number; platform?: string; complete?: boolean; size?: number; date?: string };
 }
 
@@ -30,10 +32,23 @@ export interface SearchResponse {
   challenged?: SourceKind[];
 }
 
+/** What the proxy knows about an allowlisted wiki. */
+export interface WikiSite {
+  host: string;
+  kind: SourceKind;
+  sitename: string;
+  license: string;
+  licenseUrl: string;
+  personalUseOnly: boolean;
+  gamepedia: boolean;
+}
+
 export interface SourceInfo {
   kind: SourceKind;
   enabledByDefault: boolean;
   note?: string;
+  /** For the multi-wiki platforms: which wikis WIKI_ALLOWLIST permits. */
+  hosts?: string[];
 }
 
 export interface ListResponse {
@@ -162,9 +177,38 @@ export const api = {
     return getJson<{ sources: SourceInfo[] }>('/api/catalog/sources', signal);
   },
 
-  list(source: string, prefix?: string, signal?: AbortSignal): Promise<ListResponse> {
+  /**
+   * A MediaWiki API call against any allowlisted wiki.
+   *
+   * The generic form of `strategyWiki`. No browser-direct fallback: that exists
+   * only because StrategyWiki bot-challenges the server, and neither Fandom nor
+   * wiki.gg does on api.php.
+   */
+  wiki<T>(host: string, params: Record<string, string>, signal?: AbortSignal): Promise<T> {
+    return getJson<T>(
+      `/api/wiki/${encodeURIComponent(host)}?${new URLSearchParams(params)}`,
+      signal,
+    );
+  },
+
+  /** Name and licence of an allowlisted wiki — the licence gate's input. */
+  wikiSite(host: string, signal?: AbortSignal): Promise<WikiSite> {
+    return getJson<WikiSite>(`/api/wiki/${encodeURIComponent(host)}/site`, signal);
+  },
+
+  /**
+   * A browse listing. `host` picks the wiki for the platform sources, where
+   * `source` names a platform rather than a single site.
+   */
+  list(
+    source: string,
+    prefix?: string,
+    signal?: AbortSignal,
+    host?: string,
+  ): Promise<ListResponse> {
     const params = new URLSearchParams();
     if (prefix) params.set('prefix', prefix);
+    if (host) params.set('host', host);
     return getJson<ListResponse>(`/api/catalog/${source}/list?${params}`, signal);
   },
 

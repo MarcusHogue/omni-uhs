@@ -22,8 +22,20 @@ export const STRATEGYWIKI_BASE = 'https://strategywiki.org/wiki/';
 
 export interface WikiTarget {
   kind: SourceKind;
+  /** Full api.php URL. */
   api: string;
+  /** Human page prefix, used for attribution URLs. */
   pageBase: string;
+  /**
+   * Hosts this target may reach.
+   *
+   * StrategyWiki lives in the global `UPSTREAM_ALLOWLIST`, so it leaves this
+   * unset. A Fandom or wiki.gg wiki does not — it is allowed by
+   * `WIKI_ALLOWLIST`, a separate list the fetcher knows nothing about — so its
+   * target carries the per-request override. Without this every call below is
+   * rejected by `assertAllowed`, which is what kept those sources unreachable.
+   */
+  allowlist?: readonly string[];
 }
 
 export const STRATEGYWIKI: WikiTarget = {
@@ -31,6 +43,14 @@ export const STRATEGYWIKI: WikiTarget = {
   api: STRATEGYWIKI_API,
   pageBase: STRATEGYWIKI_BASE,
 };
+
+/** The fetch options every call in this module shares. */
+const fetchOptions = (target: WikiTarget, url: string, ttl: number) => ({
+  url,
+  ttl,
+  accept: 'application/json',
+  ...(target.allowlist ? { allowlist: target.allowlist } : {}),
+});
 
 /** Build an api.php URL with the politeness parameters already applied. */
 export function apiUrl(api: string, params: Record<string, string>): string {
@@ -46,7 +66,21 @@ interface SearchPayload {
   query?: { search?: { title?: string; snippet?: string }[] };
 }
 
-export function parseWikiSearch(json: string, kind: SourceKind): CatalogEntry[] {
+/** The wiki an entry came from, for sources that span many. */
+const hostOf = (target?: WikiTarget): { host?: string } => {
+  if (!target?.allowlist) return {};
+  try {
+    return { host: new URL(target.api).hostname };
+  } catch {
+    return {};
+  }
+};
+
+export function parseWikiSearch(
+  json: string,
+  kind: SourceKind,
+  target?: WikiTarget,
+): CatalogEntry[] {
   let payload: SearchPayload;
   try {
     payload = JSON.parse(json) as SearchPayload;
@@ -63,6 +97,7 @@ export function parseWikiSearch(json: string, kind: SourceKind): CatalogEntry[] 
       title,
       normalizedTitle: normalizeTitle(title),
       ref: hit.title,
+      ...hostOf(target),
     });
   }
   // Deduplicate: a game usually matches several of its own sub-pages.
@@ -88,15 +123,19 @@ export async function searchWiki(
     srlimit: String(Math.min(limit * 2, 50)),
     srnamespace: '0',
   });
-  const result = await cache.fetch({ url, ttl: config.ttl.search, accept: 'application/json' });
-  return parseWikiSearch(await cache.readText(result), target.kind).slice(0, limit);
+  const result = await cache.fetch(fetchOptions(target, url, config.ttl.search));
+  return parseWikiSearch(await cache.readText(result), target.kind, target).slice(0, limit);
 }
 
 interface AllPagesPayload {
   query?: { allpages?: { title?: string }[] };
 }
 
-export function parseAllPages(json: string, kind: SourceKind): CatalogEntry[] {
+export function parseAllPages(
+  json: string,
+  kind: SourceKind,
+  target?: WikiTarget,
+): CatalogEntry[] {
   let payload: AllPagesPayload;
   try {
     payload = JSON.parse(json) as AllPagesPayload;
@@ -111,6 +150,7 @@ export function parseAllPages(json: string, kind: SourceKind): CatalogEntry[] {
       title,
       normalizedTitle: normalizeTitle(title.split('/')[0]!),
       ref: title,
+      ...hostOf(target),
     }));
 }
 
@@ -128,8 +168,8 @@ export async function listWikiPages(
     aplimit: String(Math.min(limit, 500)),
     apnamespace: '0',
   });
-  const result = await cache.fetch({ url, ttl: config.ttl.index, accept: 'application/json' });
-  return parseAllPages(await cache.readText(result), target.kind);
+  const result = await cache.fetch(fetchOptions(target, url, config.ttl.index));
+  return parseAllPages(await cache.readText(result), target.kind, target);
 }
 
 export interface WikiPage {
@@ -162,7 +202,7 @@ export async function fetchWikitext(
     rvslots: 'main',
     rvprop: 'content|ids',
   });
-  const result = await cache.fetch({ url, ttl: config.ttl.wiki, accept: 'application/json' });
+  const result = await cache.fetch(fetchOptions(target, url, config.ttl.wiki));
   const payload = JSON.parse(await cache.readText(result)) as RevisionsPayload;
   const page = payload.query?.pages?.[0];
   if (!page || page.missing) return null;
@@ -224,6 +264,6 @@ export function parseRightsInfo(json: string): RightsInfo {
 
 export async function fetchRightsInfo(cache: Cache, target: WikiTarget): Promise<RightsInfo> {
   const url = apiUrl(target.api, { action: 'query', meta: 'siteinfo', siprop: 'rightsinfo' });
-  const result = await cache.fetch({ url, ttl: config.ttl.index, accept: 'application/json' });
+  const result = await cache.fetch(fetchOptions(target, url, config.ttl.index));
   return parseRightsInfo(await cache.readText(result));
 }
