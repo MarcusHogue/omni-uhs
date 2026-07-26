@@ -60,8 +60,12 @@ export interface WikiPageCandidates {
   host: string;
   game: string;
   titles: string[];
-  fromCategories: number;
-  fromSearch: number;
+  /** How many titles each signal contributed — "main page", "categories", … */
+  sources: Record<string, number>;
+  /** The wiki was too large to enumerate fully. */
+  truncated: boolean;
+  /** Distinct pages considered before truncating to the cap. */
+  considered: number;
 }
 
 /** A wiki the proxy found and verified, offered for adding. */

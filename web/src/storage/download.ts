@@ -325,10 +325,7 @@ async function downloadWiki(
   const gameTitle = entry.title || candidates.game;
 
   if (candidates.titles.length === 0) {
-    throw new Error(
-      `No guidance pages found on ${host}. It may file its pages under categories this ` +
-        'does not recognise.',
-    );
+    throw new Error(`No readable pages found on ${host}.`);
   }
 
   // Batched, because one request per page would be forty round trips to

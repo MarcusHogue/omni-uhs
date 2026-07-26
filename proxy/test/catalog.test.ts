@@ -11,6 +11,7 @@ import { parseAllPages, parseRightsInfo, parseWikiSearch, apiUrl } from '../src/
 import { NORMALIZE_VECTORS, normalizeTitle } from '../src/catalog/normalize.js';
 import { describeSources, groupEntries } from '../src/catalog/search.js';
 import { fallbackSlugs, hostFromQuery, slugCandidates } from '../src/catalog/discover.js';
+import { scoreCategory } from '../src/catalog/wikipages.js';
 import {
   allowWiki,
   gameTitleOf,
@@ -392,6 +393,38 @@ describe('source advertisement', () => {
     expect(
       describeSources(cache).filter((source) => source.enabledByDefault).map((s) => s.kind),
     ).toEqual(['uhs', 'ifarchive', 'ifdb']);
+  });
+});
+
+describe('page selection', () => {
+  it('scores a category on the words in its name, wherever they are', () => {
+    // The whole reason the old exact-name list failed: real categories are
+    // "Bosses (Hollow Knight)", not "Bosses".
+    expect(scoreCategory('Bosses (Hollow Knight)', 51)).toBeGreaterThan(0);
+    expect(scoreCategory('Secret rabbits', 18)).toBeGreaterThan(0);
+    expect(scoreCategory('Locations on Timber Hearth', 45)).toBeGreaterThan(0);
+    expect(scoreCategory('Puzzles', 50)).toBeGreaterThan(0);
+  });
+
+  it('rejects the file and maintenance categories that dominate a wiki', () => {
+    // These are the biggest categories on every game wiki and hold no articles.
+    expect(scoreCategory('X HK Screenshots', 1265)).toBe(0);
+    expect(scoreCategory('Non-free files', 592)).toBe(0);
+    expect(scoreCategory('Animal Well egg textures', 65)).toBe(0);
+    expect(scoreCategory('Template documentation', 44)).toBe(0);
+    expect(scoreCategory('Candidates for deletion', 12)).toBe(0);
+  });
+
+  it('rejects a bucket, however promising its name', () => {
+    // A thousand-member "Items" category is a namespace, not a reading list.
+    expect(scoreCategory('Items', 1200)).toBe(0);
+    // ...and a two-member one is usually an accident.
+    expect(scoreCategory('Puzzles', 1)).toBe(0);
+  });
+
+  it('prefers a tighter category and a name that says more', () => {
+    expect(scoreCategory('Boss strategies', 20)).toBeGreaterThan(scoreCategory('Bosses', 20));
+    expect(scoreCategory('Puzzles', 20)).toBeGreaterThan(scoreCategory('Puzzles', 150));
   });
 });
 
