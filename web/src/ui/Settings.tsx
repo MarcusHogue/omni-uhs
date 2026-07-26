@@ -13,6 +13,11 @@ import {
   type ExportManifest,
   type ExportScope,
 } from '../storage/exchange';
+import {
+  DEFAULT_IMAGE_BUDGET_MB,
+  DEFAULT_IMAGE_WIDTH,
+  imageSettings,
+} from '../storage/settings';
 import { ErrorNote, formatBytes, Spinner } from './bits';
 import { useAppUpdate, useLibrary, useOnline } from './hooks';
 import { isReleaseBuild, WEB_VERSION } from './update';
@@ -190,6 +195,8 @@ export function Settings(): JSX.Element {
       </section>
 
       <GameWikis />
+
+      <WikiImages />
 
       <section>
         <h2>Registration-gated hints</h2>
@@ -474,6 +481,96 @@ export function Settings(): JSX.Element {
  * operator's standing decision, and an app should not be able to quietly undo
  * something somebody put in the environment on purpose.
  */
+/**
+ * Whether to bring wiki pictures down with a game, and how much of them.
+ *
+ * On several games the picture is the answer — Blue Prince's puzzles are scans
+ * of in-game documents — so this defaults to on. It has a real cost and two
+ * consequences worth stating on the screen rather than in a changelog: the
+ * download is much larger and much slower, and a game that carries pictures is
+ * personal-use-only, so it stops appearing in a shareable export.
+ */
+function WikiImages(): JSX.Element {
+  const [enabled, setEnabled] = useState(true);
+  const [width, setWidth] = useState(DEFAULT_IMAGE_WIDTH);
+  const [budget, setBudget] = useState(DEFAULT_IMAGE_BUDGET_MB);
+
+  useEffect(() => {
+    void (async () => {
+      const settings = await imageSettings();
+      setEnabled(settings.enabled);
+      setWidth(settings.maxWidth);
+      setBudget(Math.round(settings.budgetBytes / (1024 * 1024)));
+    })();
+  }, []);
+
+  return (
+    <section>
+      <h2>Wiki images</h2>
+      <p className="muted">
+        Some games keep their answers in pictures rather than prose — a scan of an in-game
+        document, a marked-up map. Those are stored with the game so they work offline, and
+        sit behind the same tap as the hint they belong to.
+      </p>
+      <label className="toggle">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={(event) => {
+            setEnabled(event.target.checked);
+            void setSetting('wikiImages', event.target.checked);
+          }}
+        />
+        Download images with wiki games
+      </label>
+      <p className="muted">
+        A game with images is <strong>personal use only</strong>: neither Fandom nor wiki.gg
+        states a licence for them, so it will not appear in a shareable export. It is still
+        in a full backup.
+      </p>
+
+      <div className="field-row">
+        <label>
+          Width
+          <select
+            value={width}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setWidth(next);
+              void setSetting('wikiImageWidth', next);
+            }}
+          >
+            <option value={320}>320 px</option>
+            <option value={640}>640 px (measured)</option>
+            <option value={1024}>1024 px</option>
+          </select>
+        </label>
+        <label>
+          Budget per game
+          <select
+            value={budget}
+            onChange={(event) => {
+              const next = Number(event.target.value);
+              setBudget(next);
+              void setSetting('wikiImageBudgetMb', next);
+            }}
+          >
+            <option value={10}>10 MB</option>
+            <option value={40}>40 MB</option>
+            <option value={100}>100 MB</option>
+          </select>
+        </label>
+      </div>
+      <p className="muted">
+        640 px is the only width that has been costed end to end: the largest game measured
+        came to about 11 MB of images at that width, against 413 MB at full size. The other
+        two work; their totals are guesses. Whatever the width, tapping a picture fetches the
+        original from the wiki when you are online.
+      </p>
+    </section>
+  );
+}
+
 function GameWikis(): JSX.Element {
   const [wikis, setWikis] = useState<WikiSite[]>([]);
   const [loading, setLoading] = useState(true);

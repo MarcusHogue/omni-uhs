@@ -60,8 +60,12 @@ export interface WikiPageCandidates {
   host: string;
   game: string;
   titles: string[];
-  fromCategories: number;
-  fromSearch: number;
+  /** How many titles each signal contributed — "main page", "categories", … */
+  sources: Record<string, number>;
+  /** The wiki was too large to enumerate fully. */
+  truncated: boolean;
+  /** Distinct pages considered before truncating to the cap. */
+  considered: number;
 }
 
 /** A wiki the proxy found and verified, offered for adding. */
@@ -356,6 +360,32 @@ export const api = {
       throw new ApiError(body.error ?? `Download failed (${response.status})`, response.status);
     }
     return new Uint8Array(await response.arrayBuffer());
+  },
+
+  /**
+   * The bytes of one wiki picture.
+   *
+   * The URL comes from the wiki's own `imageinfo`, and the proxy checks it
+   * against that wiki's image hosts before fetching anything — a URL from
+   * anywhere else is refused there, not here.
+   */
+  async wikiImage(
+    host: string,
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<{ bytes: Uint8Array; mime: string }> {
+    const response = await fetch(
+      `/api/wiki/${encodeURIComponent(host)}/image?url=${encodeURIComponent(url)}`,
+      { signal },
+    );
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as { error?: string };
+      throw new ApiError(body.error ?? `Image failed (${response.status})`, response.status);
+    }
+    return {
+      bytes: new Uint8Array(await response.arrayBuffer()),
+      mime: response.headers.get('content-type')?.split(';')[0] ?? 'application/octet-stream',
+    };
   },
 
   async ifArchiveFile(path: string, signal?: AbortSignal): Promise<Uint8Array> {

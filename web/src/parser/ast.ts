@@ -75,6 +75,18 @@ export interface HintGroupNode extends NodeBase {
   label: string;
   /** Revealed strictly one at a time. */
   hints: HintNode[];
+  /**
+   * Advisory only, set by the wiki parser.
+   *
+   * A wiki page is not written to be a hint, and only some of it is. This says
+   * which the section looks like so the reader can lead with the useful part —
+   * it never removes anything, because the signal cannot see a deduction game's
+   * answers at all. See `parser/wikitext/guidance.ts`.
+   *
+   * Absent is the common case and means "no opinion", not "reference".
+   * `reference` is only ever set from the heading, never from a low score.
+   */
+  role?: 'guidance' | 'reference';
 }
 
 export interface HintNode extends NodeBase {
@@ -82,6 +94,14 @@ export interface HintNode extends NodeBase {
   content: Inline[];
   /** From `nesthint` '=' sections. */
   nested?: SubjectNode[];
+  /**
+   * Pictures that belong to this step, from the wiki sources.
+   *
+   * Attached to the hint and not to the subject on purpose: on games like Blue
+   * Prince the picture *is* the answer — a scan of an in-game document — so it
+   * must not be rendered until the hint above it has been revealed by a tap.
+   */
+  images?: ImageNode[];
 }
 
 export interface TextNode extends NodeBase {
@@ -95,12 +115,42 @@ export interface Hotspot {
   target: LinkNode;
 }
 
+/**
+ * Where a wiki picture came from, and what happened to it.
+ *
+ * Kept alongside the bytes rather than inside them so a document can say
+ * honestly that it *has* a picture it did not download — a caption and a link
+ * out beat a silent gap when the caption is "Solution to the Antechamber door".
+ */
+export interface ImageSource {
+  /** The wiki's own file title, e.g. `Antechamber puzzle.png`. Unique per wiki. */
+  file: string;
+  /** Page to view the original on. */
+  url?: string;
+  width?: number;
+  height?: number;
+  /** Set when the bytes were deliberately not stored. */
+  omitted?: 'decorative' | 'budget' | 'unavailable';
+}
+
 export interface ImageNode extends NodeBase {
   type: 'image';
   label: string;
+  /**
+   * The bytes, or empty for a wiki picture whose bytes live in the `images`
+   * store under `blobKey` — 11 MB of Blue Prince scans inside the document
+   * would be read back on every visit to the Library.
+   *
+   * Renderers must check `data.length`: `new Blob([new Uint8Array()])` draws a
+   * broken-image icon.
+   */
   data: Uint8Array;
   mime: string;
   hotspots?: Hotspot[];
+  /** Key into the `images` store. Unset for UHS, where the bytes are inline. */
+  blobKey?: string;
+  /** Unset for UHS. */
+  source?: ImageSource;
 }
 
 export interface LinkNode extends NodeBase {
@@ -150,6 +200,7 @@ export function* walk(node: Node): Generator<Node> {
   } else if (node.type === 'hints') {
     for (const hint of node.hints) {
       for (const nested of hint.nested ?? []) yield* walk(nested);
+      for (const image of hint.images ?? []) yield* walk(image);
     }
   } else if (node.type === 'image') {
     for (const hotspot of node.hotspots ?? []) yield* walk(hotspot.target);

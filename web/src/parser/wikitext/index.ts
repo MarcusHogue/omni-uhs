@@ -13,6 +13,8 @@
 import type {
   HintDocument,
   HintGroupNode,
+  HintNode,
+  ImageNode,
   Inline,
   Node,
   ParseResult,
@@ -22,6 +24,9 @@ import type {
 } from '../ast';
 import { inlineText } from '../ast';
 import { stableId } from '../id';
+import { guidanceRank, isNeverHint, looksLikeGuidance, scoreSection } from './guidance';
+import type { ImageRef } from './images';
+import { extractGalleries, findFileLinks, stripFileLinks } from './images';
 
 export interface WikiPageInput {
   title: string;
@@ -63,10 +68,19 @@ export interface WikiWalkthroughOptions {
   /** Defaults to `as-written`, so existing callers are unaffected. */
   reveal?: RevealMode;
   /**
-   * Drop pages that look like stat tables rather than guidance. Only sensible
-   * with `progressive`; off by default.
+   * Score each section, label it, and lead the document with the ones that read
+   * like guidance. Only sensible with `progressive`; off by default, so
+   * StrategyWiki — which is already written as a walkthrough — is untouched.
    */
-  skipReferencePages?: boolean;
+  rank?: boolean;
+  /**
+   * Record the pictures each hint refers to, for the storage layer to fetch.
+   *
+   * Off by default. StrategyWiki's fallback path reads the wiki straight from
+   * the browser and cannot fetch image bytes at all, so turning this on there
+   * would produce references that never resolve.
+   */
+  images?: boolean;
 }
 
 /** Templates whose content is a spoiler and must start hidden. */
@@ -80,11 +94,18 @@ const SPOILER_TEMPLATES = /^(spoiler|hidden|collapse|mbox spoiler)/i;
  * text through turned a filing instruction into a sentence, and on a page whose
  * only content was categories, into a hint reading "Category:Creatures".
  */
-const FILING_LINK = /\[\[(?:Category|File|Image|Media|Template|Special):[^\]]*\]\]/gi;
+const FILING_LINK = /\[\[(?:Category|Media|Template|Special):[^\]]*\]\]/gi;
 
-/** Everything that vanishes: markers, filing, and comments. */
+/**
+ * Everything that vanishes: markers, filing, and comments.
+ *
+ * File links go through `stripFileLinks`, not `FILING_LINK`. A caption may
+ * contain a link of its own — `[[File:Door.png|thumb|Solution to the
+ * [[Antechamber]] door]]` — and the flat `[^\]]*` pattern stops at the first
+ * `]]` inside it, leaving `door]]` in the prose.
+ */
 const removed = (text: string): string =>
-  text
+  stripFileLinks(text)
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<ref[^>]*\/>/gi, '')
     .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
@@ -330,6 +351,8 @@ interface Block {
   /** Display content, with in-document links preserved as links. */
   content: Inline[];
   spoiler: boolean;
+  /** Pictures referenced alongside this block. Empty unless asked for. */
+  images: ImageRef[];
 }
 
 /** Resolves a page title to the id of its subject, when it is in this download. */
@@ -341,15 +364,30 @@ const joinBlocks = (blocks: Block[]): Inline[] =>
     index === 0 ? block.content : [{ kind: 'run' as const, text: '\n' }, ...block.content],
   );
 
-/** Split a section's wikitext into displayable blocks. */
-function toBlocks(body: string, resolve?: Resolver): Block[] {
+/**
+ * Split a section's wikitext into displayable blocks.
+ *
+ * `<gallery>` blocks come out first and unconditionally. Nothing else in the
+ * pipeline recognised them — `FILING_LINK` only matches bracketed `[[File:…]]`,
+ * and `cleaned` strips a fixed list of inline HTML tags that does not include
+ * `gallery` — so a gallery survived into a hint as prose reading
+ * `<gallery widths="200px"> File:Conceptart 01.jpg File:Conceptart 02.jpg`.
+ */
+function toBlocks(body: string, resolve?: Resolver, withImages = false): Block[] {
+  const { text, images: fromGalleries } = extractGalleries(body);
   const blocks: Block[] = [];
   let paragraph: string[] = [];
   let paragraphSpoiler = false;
+  /** Pictures seen since the last block, waiting for something to belong to. */
+  let pending: ImageRef[] = [];
 
   const push = (raw: string, spoiler: boolean): void => {
     const content = toInline(raw, resolve);
-    if (content.length > 0) blocks.push({ content, spoiler });
+    const images = pending;
+    pending = [];
+    // A picture with no prose is still a block: on Blue Prince a section is
+    // often nothing but the scan that answers it.
+    if (content.length > 0 || images.length > 0) blocks.push({ content, spoiler, images });
   };
 
   const flush = (): void => {
@@ -358,8 +396,9 @@ function toBlocks(body: string, resolve?: Resolver): Block[] {
     paragraphSpoiler = false;
   };
 
-  for (const rawLine of body.split('\n')) {
+  for (const rawLine of text.split('\n')) {
     const line = rawLine.trimEnd();
+    if (withImages) pending.push(...findFileLinks(line));
     if (line.trim() === '') {
       flush();
       continue;
@@ -377,6 +416,14 @@ function toBlocks(body: string, resolve?: Resolver): Block[] {
     paragraphSpoiler ||= spoiler;
   }
   flush();
+
+  if (withImages && fromGalleries.length > 0) {
+    // A gallery's position is lost when it is blanked out, so it goes with the
+    // last thing the section said — which for a gallery is usually where it was.
+    const last = blocks[blocks.length - 1];
+    if (last) last.images.push(...fromGalleries);
+    else blocks.push({ content: [], spoiler: false, images: fromGalleries });
+  }
   return blocks;
 }
 
@@ -407,47 +454,33 @@ export function splitSections(wikitext: string): Section[] {
 }
 
 /**
- * Does this page read like guidance, or like a database row?
+ * A picture the page refers to, with no bytes yet.
  *
- * A reference wiki's stat pages are mostly infobox templates and tables — the
- * two things `toBlocks` already discards — so a page whose surviving prose is a
- * thin rind around a big template is one we should not be turning into hints.
- * Returns the share of the page's lines that survived as readable prose.
+ * `data` stays empty until `storage/images.ts` has fetched something, and
+ * `blobKey` is set at the same time. A renderer must therefore check
+ * `data.length` rather than assuming bytes are there — the alternative,
+ * making `data` optional, would ripple through the UHS path where it never is.
  */
-/** Readable characters left after templates and tables are removed. */
-export function proseChars(wikitext: string): number {
-  return splitSections(stripBlockMarkup(wikitext)).reduce(
-    (total, section) =>
-      total + toBlocks(section.body).reduce((n, b) => n + inlineText(b.content).length, 0),
-    0,
-  );
+function toImageNode(ref: ImageRef, id: string, wikiBase: string): ImageNode {
+  const underscored = ref.file.replace(/ /g, '_');
+  return {
+    id,
+    type: 'image',
+    label: ref.caption ? stripMarkup(ref.caption) : ref.file.replace(/\.\w+$/, ''),
+    data: new Uint8Array(0),
+    mime: '',
+    source: {
+      file: ref.file,
+      url: `${wikiBase}File:${encodeURIComponent(underscored)}`,
+      omitted: 'unavailable',
+    },
+  };
 }
 
-/** That prose as a share of the raw page. */
-export function proseRatio(wikitext: string): number {
-  const raw = wikitext.replace(/\s+/g, ' ').trim().length;
-  return raw === 0 ? 0 : proseChars(wikitext) / raw;
-}
-
-/**
- * Is this page reference data rather than something to read?
- *
- * Ratio alone is the obvious measure and the wrong one: how much template soup
- * surrounds a page varies enormously, so a genuinely useful page can score low
- * simply for sitting under a big infobox. Blue Prince's *Antechamber* page —
- * one of the most guidance-heavy on that wiki — is 11% prose, and a ratio gate
- * threw it away.
- *
- * What actually separates a stat page is having almost no prose at all, in
- * absolute terms. So both have to be true before a page is dropped, and the
- * bias is deliberately towards keeping: a mediocre page costs a scroll, a
- * dropped guide costs the thing you came for.
- */
-const MIN_PROSE_CHARS = 300;
-const MIN_PROSE_RATIO = 0.15;
-
-export function looksLikeReference(wikitext: string): boolean {
-  return proseChars(wikitext) < MIN_PROSE_CHARS && proseRatio(wikitext) < MIN_PROSE_RATIO;
+/** Turn a block's picture references into nodes hanging off one hint. */
+function imagesFor(block: Block, hintId: string, wikiBase: string): ImageNode[] | undefined {
+  if (block.images.length === 0) return undefined;
+  return block.images.map((ref, n) => toImageNode(ref, `${hintId}:i${n}`, wikiBase));
 }
 
 /** Build the subject tree for one page. */
@@ -456,6 +489,14 @@ function pageToSubject(
   idPrefix: string,
   reveal: RevealMode,
   resolve?: Resolver,
+  /** Score, label and order the sections. Off for StrategyWiki. */
+  rank = false,
+  /** Collects each group's rank, for the index built at the document level. */
+  rankOf: Map<string, number> = new Map(),
+  /** Record picture references. Off for StrategyWiki. */
+  images = false,
+  /** e.g. https://blue-prince.fandom.com/wiki/ — for the "view on the wiki" link. */
+  wikiBase = '',
 ): SubjectNode {
   const label = page.title.includes('/') ? page.title.slice(page.title.indexOf('/') + 1) : page.title;
   const root: SubjectNode = {
@@ -469,7 +510,12 @@ function pageToSubject(
   let counter = 0;
 
   for (const section of splitSections(stripBlockMarkup(page.wikitext))) {
-    const blocks = toBlocks(section.body, resolve);
+    // Filing, not content: references, galleries, track listings. Dropped
+    // rather than ranked — they are only a few per cent of a wiki's prose, but
+    // they are rows, and rows are what you scroll past.
+    if (rank && isNeverHint(section.title)) continue;
+
+    const blocks = toBlocks(section.body, resolve, images);
 
     let target = root;
     if (section.title) {
@@ -498,12 +544,27 @@ function pageToSubject(
           id: `${target.id}.p${target.children.length}`,
           type: 'hints',
           label: section.title || root.label,
-          hints: plain.map((block, index) => ({
-            id: `${target.id}.p${target.children.length}:h${index}`,
-            type: 'hint' as const,
-            content: block.content,
-          })),
+          hints: plain.map((block, index) => {
+            const id = `${target.id}.p${target.children.length}:h${index}`;
+            const hint: HintNode = { id, type: 'hint', content: block.content };
+            const pictures = imagesFor(block, id, wikiBase);
+            if (pictures) hint.images = pictures;
+            return hint;
+          }),
         };
+        if (rank) {
+          const signals = scoreSection(
+            section.title || root.label,
+            plain.map((block) => inlineText(block.content)).join(' '),
+          );
+          // Only the positive label is set. Calling everything else
+          // `reference` would put "not a hint" on Obra Dinn's Identification
+          // sections, which are the answers — the score cannot see them, and a
+          // label is a claim the score is not entitled to make. Unlabelled
+          // means "no opinion", and the rank still orders it.
+          if (looksLikeGuidance(signals)) group.role = 'guidance';
+          rankOf.set(group.id!, guidanceRank(signals));
+        }
         target.children.push(group);
       } else {
         const text: TextNode = {
@@ -523,11 +584,13 @@ function pageToSubject(
         id: `${target.id}.s${target.children.length}`,
         type: 'hints',
         label: section.title ? `${section.title} (spoilers)` : 'Spoilers',
-        hints: spoilers.map((block, index) => ({
-          id: `${target.id}.s${target.children.length}:h${index}`,
-          type: 'hint' as const,
-          content: block.content,
-        })),
+        hints: spoilers.map((block, index) => {
+          const id = `${target.id}.s${target.children.length}:h${index}`;
+          const hint: HintNode = { id, type: 'hint', content: block.content };
+          const pictures = imagesFor(block, id, wikiBase);
+          if (pictures) hint.images = pictures;
+          return hint;
+        }),
       };
       target.children.push(group);
     }
@@ -587,6 +650,77 @@ function pruneDeadLinks(roots: Node[]): void {
   roots.forEach(walkNode);
 }
 
+/** The best rank anywhere under a node — how promising the page looks. */
+function bestRank(node: Node, rankOf: Map<string, number>): number {
+  if (node.type === 'hints') return rankOf.get(node.id ?? '') ?? 0;
+  if (node.type !== 'subject') return -Infinity;
+  return node.children.reduce(
+    (best, child) => Math.max(best, bestRank(child, rankOf)),
+    -Infinity,
+  );
+}
+
+/**
+ * Lead with what reads like guidance, at every level.
+ *
+ * A stable sort, so pages that score the same keep the order the wiki gave
+ * them — which for a chaptered game is the order it should be read in.
+ */
+function orderByGuidance(nodes: Node[], rankOf: Map<string, number>): void {
+  for (const node of nodes) {
+    if (node.type === 'subject') orderByGuidance(node.children, rankOf);
+  }
+  const ranked = nodes.map((node, index) => ({ node, index, rank: bestRank(node, rankOf) }));
+  ranked.sort((a, b) => b.rank - a.rank || a.index - b.index);
+  ranked.forEach((row, position) => {
+    nodes[position] = row.node;
+  });
+}
+
+/** How many entries the index offers before it stops being a shortcut. */
+const INDEX_LIMIT = 20;
+
+/**
+ * A shortcut to the sections most likely to help.
+ *
+ * Sixty pages of wiki is not a hint system, it is a reading list, and the first
+ * question is always "where do I start". This answers it without removing
+ * anything: every page is still there, in full, one tap further away.
+ *
+ * "Likely", because the score is a guess. A deduction game's answers score zero
+ * and will not appear here — they are still on their own pages, which is why
+ * this is an index and not a filter.
+ */
+function guidanceIndex(children: Node[], rankOf: Map<string, number>): SubjectNode | null {
+  const found: { id: string; label: string; rank: number }[] = [];
+  const visit = (node: Node, page: string): void => {
+    if (node.type === 'hints' && node.role === 'guidance' && node.id) {
+      const rank = rankOf.get(node.id) ?? 0;
+      // The page name is the useful half: "Room 46 — Puzzle" locates it, and a
+      // bare "Puzzle" repeated eleven times does not.
+      const label = node.label === page ? page : `${page} — ${node.label}`;
+      found.push({ id: node.id, label, rank });
+    }
+    if (node.type === 'subject') for (const child of node.children) visit(child, page);
+  };
+  for (const child of children) visit(child, child.type === 'subject' ? child.label : '');
+
+  if (found.length < 2) return null;
+  found.sort((a, b) => b.rank - a.rank || a.label.localeCompare(b.label));
+
+  return {
+    id: 'p:guidance',
+    type: 'subject',
+    label: 'Likely guidance',
+    children: found.slice(0, INDEX_LIMIT).map((row, i) => ({
+      id: `p:guidance:${i}`,
+      type: 'link' as const,
+      label: row.label,
+      targetId: row.id,
+    })),
+  };
+}
+
 export function parseWikiWalkthrough(
   pages: WikiPageInput[],
   options: WikiWalkthroughOptions,
@@ -605,24 +739,34 @@ export function parseWikiWalkthrough(
       return false;
     }
     if (/^#\s*REDIRECT/i.test(page.wikitext.trim())) return false;
-    if (options.skipReferencePages && looksLikeReference(page.wikitext)) {
-      // Named, not silent: "why is that page missing" is a fair question.
-      warnings.push(
-        `${page.title}: skipped, reads as reference data rather than guidance ` +
-          `(${proseChars(page.wikitext)} characters of prose)`,
-      );
-      return false;
-    }
     void index;
     return true;
   });
 
   const pageIds = new Map(kept.map((page, index) => [normalizePageTitle(page.title), `p:${index}`]));
   const resolve = (title: string): string | undefined => pageIds.get(title);
+  const rank = options.rank ?? false;
+  const rankOf = new Map<string, number>();
+  const images = options.images ?? false;
 
   kept.forEach((page, index) => {
-    const subject = pageToSubject(page, `p:${index}`, reveal, resolve);
+    const subject = pageToSubject(
+      page,
+      `p:${index}`,
+      reveal,
+      resolve,
+      rank,
+      rankOf,
+      images,
+      options.baseUrl,
+    );
     if (subject.children.length > 0) children.push(subject);
+    else if (rank) {
+      // Everything on it was a gallery, a table, or a references list. Worth
+      // saying: "why is that page not here" is a fair question, and silence
+      // makes it look like the download failed.
+      warnings.push(`${page.title}: nothing on it reads as content`);
+    }
   });
 
   // A page can still come out empty — every section a table, say — so anything
@@ -637,6 +781,12 @@ export function parseWikiWalkthrough(
     options.documentUrl ??
     `${options.baseUrl}${encodeURIComponent(options.gameTitle.replace(/ /g, '_'))}`;
   const revision = first?.revision ?? null;
+
+  if (rank) {
+    orderByGuidance(children, rankOf);
+    const index = guidanceIndex(children, rankOf);
+    if (index) children.unshift(index);
+  }
 
   const root: SubjectNode =
     children.length === 1 && children[0]!.type === 'subject'

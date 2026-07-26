@@ -26,6 +26,7 @@ import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import { deserializeDocument, serializeDocument } from '../parser/serialize';
 import {
   getBlob,
+  listImages,
   listDocuments,
   listRevealStates,
   listSettings,
@@ -34,14 +35,20 @@ import {
   setSetting,
   type RevealState,
   type StoredDocument,
+  type StoredImage,
 } from './db';
 
 /**
  * Bumped to 2 when backups arrived: a v2 file may contain `scope`,
- * `reveal/` and `settings.json`, none of which a v1 reader expects. v1 files
- * are still importable — they are just a backup with no state in them.
+ * `reveal/` and `settings.json`, none of which a v1 reader expects. Bumped to
+ * 3 for wiki pictures, which travel as `images/<docId>/` plus an index mapping
+ * zip-safe names back to their real keys.
+ *
+ * Older files are still importable, in both cases by simply not containing the
+ * newer parts. Refusing to restore someone's older backup would defeat the
+ * point of having one.
  */
-export const EXPORT_VERSION = 2;
+export const EXPORT_VERSION = 3;
 
 export type ExportScope = 'shareable' | 'backup';
 
@@ -61,6 +68,8 @@ export interface ExportManifest {
     revealStates: number;
     settings: number;
     preferences: number;
+    /** Wiki pictures. Absent in a v2 archive, which had no images store. */
+    images?: number;
   };
 }
 
@@ -119,6 +128,26 @@ function writePreferences(preferences: Record<string, string>): number {
   return written;
 }
 
+/**
+ * A zip-safe, unique name for one picture.
+ *
+ * An image key is `<docId>|<file>` and a wiki file title can hold anything a
+ * filename cannot — slashes, colons, quotes — so it is escaped and truncated.
+ * Truncation alone is not enough: two keys sharing the first 180 escaped
+ * characters would produce the same name, the later write would overwrite the
+ * earlier bytes, and both manifest entries would point at it. Restoring would
+ * then hand one picture's contents to two keys, silently. MediaWiki permits
+ * titles long enough for that, so the position prefix carries the uniqueness
+ * and the escaped tail is only there to keep the archive readable.
+ */
+function slugForImage(key: string, position: number): string {
+  const escaped = [...key]
+    .map((c) => (/[a-z0-9._-]/i.test(c) ? c : `_${c.codePointAt(0)!.toString(16)}_`))
+    .join('')
+    .slice(0, 180);
+  return `${position}-${escaped}`;
+}
+
 const BACKUP_NOTICE =
   'Personal use only. This archive contains hint content that may not be ' +
   'redistributed — it is a backup of one person\'s library, for their own ' +
@@ -135,17 +164,27 @@ export async function exportLibrary(options: ExportOptions = {}): Promise<Export
 
   const all = await listDocuments();
   const included = scope === 'backup' ? all : all.filter((d) => !d.personalUseOnly);
-  const excluded =
-    scope === 'backup'
-      ? []
-      : all
-          .filter((d) => d.personalUseOnly)
-          .map((d) => ({
-            title: d.title,
-            reason: `${d.license} — personal use only, excluded from a shareable export`,
-          }));
+  const excluded: { title: string; reason: string }[] = [];
+  if (scope !== 'backup') {
+    for (const document of all.filter((d) => d.personalUseOnly)) {
+      // Two different reasons land in the same flag, and saying "CC-BY-SA --
+      // personal use only" about a CC-BY-SA wiki would read as a contradiction.
+      // The pictures are what is restricted: neither Fandom nor wiki.gg
+      // publishes a per-image licence, and the licence on the prose does not
+      // reach a screenshot of somebody's game.
+      const pictures = await listImages(document.id);
+      excluded.push({
+        title: document.title,
+        reason:
+          pictures.length > 0
+            ? `${pictures.length} embedded wiki image${pictures.length === 1 ? '' : 's'} with no stated licence — personal use only`
+            : `${document.license} — personal use only, excluded from a shareable export`,
+      });
+    }
+  }
 
   const files: Record<string, Uint8Array> = {};
+  let images = 0;
 
   for (const document of included) {
     const payload = {
@@ -155,6 +194,28 @@ export async function exportLibrary(options: ExportOptions = {}): Promise<Export
     files[`documents/${document.id}.json`] = strToU8(JSON.stringify(payload));
     const blob = await getBlob(document.id);
     if (blob) files[`blobs/${document.id}.bin`] = blob.bytes;
+
+    // Pictures live in their own store, keyed `<docId>|<file>`, so they need
+    // their own entries plus a manifest to put the metadata back -- a zip entry
+    // name cannot carry the mime type or the dimensions.
+    const pictures = await listImages(document.id);
+    if (pictures.length > 0) {
+      images += pictures.length;
+      files[`images/${document.id}/index.json`] = strToU8(
+        JSON.stringify(
+          pictures.map((image, position) => ({
+            key: image.key,
+            mime: image.mime,
+            width: image.width,
+            height: image.height,
+            file: `${slugForImage(image.key, position)}.bin`,
+          })),
+        ),
+      );
+      pictures.forEach((image, position) => {
+        files[`images/${document.id}/${slugForImage(image.key, position)}.bin`] = image.bytes;
+      });
+    }
   }
 
   // Reveal state and settings only ride along in a backup. They are yours, not
@@ -193,6 +254,7 @@ export async function exportLibrary(options: ExportOptions = {}): Promise<Export
       revealStates: revealStates.length,
       settings: Object.keys(settings).length,
       preferences: Object.keys(preferences).length,
+      images,
     },
   };
 
@@ -220,6 +282,44 @@ export interface ImportResult {
   preferences: number;
   scope: ExportScope;
   skipped: string[];
+}
+
+/** Read one document's pictures back out of an archive. */
+function readImages(
+  files: Record<string, Uint8Array>,
+  documentId: string,
+  skipped: string[],
+): StoredImage[] {
+  const indexRaw = files[`images/${documentId}/index.json`];
+  if (!indexRaw) return [];
+  try {
+    const entries = JSON.parse(strFromU8(indexRaw)) as {
+      key: string;
+      mime: string;
+      width: number;
+      height: number;
+      file: string;
+    }[];
+    const images: StoredImage[] = [];
+    for (const entry of entries) {
+      const content = files[`images/${documentId}/${entry.file}`];
+      // A missing picture is not a reason to drop the document: the reader
+      // shows the caption and offers to fetch it again.
+      if (!content) continue;
+      images.push({
+        key: entry.key,
+        documentId,
+        bytes: content,
+        mime: entry.mime,
+        width: entry.width,
+        height: entry.height,
+      });
+    }
+    return images;
+  } catch (error) {
+    skipped.push(`images/${documentId}/index.json: ${(error as Error).message}`);
+    return [];
+  }
 }
 
 export async function importLibrary(bytes: Uint8Array): Promise<ImportResult> {
@@ -257,6 +357,7 @@ export async function importLibrary(bytes: Uint8Array): Promise<ImportResult> {
         blobBytes
           ? { id: stored.id, bytes: blobBytes, contentType: 'application/octet-stream' }
           : undefined,
+        readImages(files, stored.id, skipped),
       );
       imported += 1;
     } catch (error) {

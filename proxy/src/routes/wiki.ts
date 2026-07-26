@@ -25,6 +25,7 @@ import {
   describeWiki,
   forgetWiki,
   gameTitleOf,
+  imageHostsFor,
   isPinned,
   isWikiAllowed,
   siteTarget,
@@ -182,6 +183,72 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
     const game = gameTitleOf(site.sitename, lower);
     const candidates = await gatherPages(cache, siteTarget(site), game);
     return reply.send({ host: lower, game, ...candidates });
+  });
+
+  /**
+   * The bytes of one picture from an allowlisted wiki.
+   *
+   * This is the only route that takes an absolute URL from the client and
+   * fetches it, so the checks are stacked deliberately and all of them matter:
+   *
+   * 1. the wiki itself must be allowlisted;
+   * 2. the URL's host must be one of *that wiki's* image hosts, which for
+   *    Fandom means its CDN and for wiki.gg means itself — never the global
+   *    `UPSTREAM_ALLOWLIST`;
+   * 3. the path must name a picture;
+   * 4. what comes back must actually be an image, and must be under the cap.
+   *
+   * `assertAllowed` re-runs on every redirect hop inside the fetcher, so a 302
+   * towards something internal is rejected there too.
+   *
+   * The size cap is applied after the fetch, not before: the cache streams to
+   * disk and does not expose `content-length` mid-flight. It stops an
+   * oversized picture being served and stored in the browser, not from
+   * touching the proxy's cache directory — which is bounded by the allowlist
+   * above being the wiki's own CDN rather than the open internet.
+   */
+  app.get('/api/wiki/:host/image', async (request, reply) => {
+    const { host } = request.params as { host: string };
+    const { url } = request.query as { url?: string };
+    const cache = getCache();
+    if (!isWikiAllowed(cache, host)) {
+      return reply.code(400).send({
+        error: `wiki host not allowed: ${host}`,
+        hint: 'add it in Settings, or to WIKI_ALLOWLIST',
+      });
+    }
+    if (!url) return reply.code(400).send({ error: 'url is required' });
+
+    const site = await describeWiki(cache, host.toLowerCase());
+    const parsed = assertAllowed(url, imageHostsFor(site));
+    // Extension *anywhere* in the path, not at the end: a Fandom thumbnail is
+    // `/…/Door.png/revision/latest/scale-to-width-down/640`, so `endsWith` here
+    // would reject every real thumbnail URL the API hands out.
+    if (!/\.(png|jpe?g|gif|webp|svg)(\/|$|\?)/i.test(parsed.pathname)) {
+      return reply.code(400).send({ error: 'only image URLs are proxied here' });
+    }
+
+    const entry = await cache.fetch({
+      url: parsed.toString(),
+      ttl: config.ttl.file,
+      allowlist: imageHostsFor(site),
+      accept: 'image/*',
+    });
+    if (!entry.contentType.startsWith('image/')) {
+      return reply.code(502).send({ error: `upstream sent ${entry.contentType}, not an image` });
+    }
+    if (entry.size > config.imageMaxBytes) {
+      return reply
+        .code(413)
+        .send({ error: `image is ${entry.size} bytes, over the ${config.imageMaxBytes} cap` });
+    }
+
+    return reply
+      .header('content-type', entry.contentType)
+      .header('content-length', String(entry.size))
+      .header('cache-control', 'private, max-age=31536000, immutable')
+      .header('x-cache', entry.fromCache ? 'HIT' : 'MISS')
+      .send(cache.stream(entry));
   });
 
   app.get('/api/wiki/:host', async (request, reply) => {

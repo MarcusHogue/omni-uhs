@@ -1,15 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
-import type { HintGroupNode, SubjectNode, TextNode } from '../../src/parser/ast.js';
+import type { HintGroupNode, ParseResult, SubjectNode, TextNode } from '../../src/parser/ast.js';
 import { inlineText, walk } from '../../src/parser/ast.js';
-import {
-  looksLikeReference,
-  parseWikiWalkthrough,
-  proseChars,
-  proseRatio,
-  splitSections,
-  stripMarkup,
-} from '../../src/parser/wikitext/index.js';
+import { parseWikiWalkthrough, splitSections, stripMarkup } from '../../src/parser/wikitext/index.js';
 
 const OPTIONS = {
   kind: 'strategywiki' as const,
@@ -406,59 +399,117 @@ Enter the code from the study.
   });
 });
 
-describe('reference-page classifier', () => {
-  const INFOBOX_PAGE = `{{npc infobox
-| boxwidth = 31em
-| auto = 113
-| name = Wall of Flesh
-| type = Boss
-| ai = Wall of Flesh AI
-| damage = 50
-| life = 8000
-| defense = 0
-| immune = confused, poisoned
-}}
-{| class="terraria"
-! Stat !! Value
-|-
-| Damage || 50
-|}
-The Wall of Flesh.`;
+describe('guidance ranking (spec §6.4)', () => {
+  const GUIDE = `== Strategy ==
+You need to break the crystal first, then jump to the ledge on the right and
+use the grapple before the platform falls. Make sure you have the charm equipped.
 
-  it('calls a stat page reference data and a guide not', () => {
-    expect(looksLikeReference(INFOBOX_PAGE)).toBe(true);
-    expect(
-      looksLikeReference('== Room 46 ==\nReach the antechamber and enter the code from the study.'),
-    ).toBe(false);
+== Trivia ==
+The boss was named after a developer's cat.
+
+== References ==
+<ref>Interview, 2019</ref>
+`;
+
+  const parse = (wikitext: string, title = 'Moorwing'): ParseResult =>
+    parseWikiWalkthrough([{ title, wikitext, revision: '1' }], {
+      ...OPTIONS,
+      kind: 'fandom',
+      reveal: 'progressive',
+      rank: true,
+    });
+
+  it('drops sections that are never a hint', () => {
+    const labels = [...walk(parse(GUIDE).document.root)].map((n) => n.label);
+    expect(labels).toContain('Strategy');
+    expect(labels).not.toContain('Trivia');
+    expect(labels).not.toContain('References');
   });
 
-  it('keeps a page that is mostly template but has real prose in it', () => {
-    // Blue Prince's Antechamber page is 11% prose and one of the most useful on
-    // that wiki. A ratio-only gate dropped it; that was the bug.
-    // Proportions taken from the real page: ~7.4k of template and table
-    // markup around ~800 characters of guidance.
-    const bulk = Array.from({ length: 300 }, (_, i) => `| field${i} = value ${i}`).join('\n');
-    const page = `{{room infobox\n${bulk}\n}}\n\n== Description ==\n${'Reaching the antechamber is the first major goal. '.repeat(17)}`;
-    expect(proseRatio(page)).toBeLessThan(0.15);
-    expect(proseChars(page)).toBeGreaterThan(300);
-    expect(looksLikeReference(page)).toBe(false);
+  it('labels instructional prose as guidance', () => {
+    const group = [...walk(parse(GUIDE).document.root)].find(
+      (n): n is HintGroupNode => n.type === 'hints',
+    )!;
+    expect(group.role).toBe('guidance');
   });
 
-  it('skips reference pages when asked, and says which and why', () => {
-    const { document, warnings } = parseWikiWalkthrough(
-      [{ title: 'Wall of Flesh', wikitext: INFOBOX_PAGE, revision: '1' }],
-      { ...OPTIONS, kind: 'wikigg', reveal: 'progressive', skipReferencePages: true },
+  it('never labels a section reference for scoring low', () => {
+    // Return of the Obra Dinn is the reason. Its answers are facts -- an
+    // "Identification" section states who someone is -- so they score zero on
+    // instructional language while being the most spoiler-bearing content on
+    // the wiki. Dropping or hiding those would lose the whole game.
+    const obraDinn = `== Identification ==
+The man in the blue coat is Alexander Booth, third mate, killed by a musket
+shot during the mutiny in Chapter 4. His body was recovered from the deck.
+`;
+    const { document } = parse(obraDinn, 'Alexander Booth');
+    const group = [...walk(document.root)].find(
+      (n): n is HintGroupNode => n.type === 'hints',
     );
-    expect(document.root.children).toHaveLength(0);
-    expect(warnings.join(' ')).toMatch(/Wall of Flesh: skipped, reads as reference data/);
+    expect(group).toBeTruthy();
+    expect(group!.hints.length).toBeGreaterThan(0);
+    // Present and readable.
+    expect(inlineText(group!.hints[0]!.content)).toContain('Alexander Booth');
+    // And unlabelled, not labelled `reference`. A "not a hint" pill on the
+    // answer to the game is worse than no pill at all.
+    expect(group!.role).toBeUndefined();
   });
 
-  it('leaves the page alone when the classifier is off', () => {
+  it('drops a reference heading whether it is singular or plural', () => {
+    // Hollow Knight writes `== Appearance ==`; Obra Dinn writes
+    // `== Appearances ==`. Both are description, neither is a hint.
+    const labels = [
+      ...walk(parse('== Appearance ==\nIt is a large winged beast.\n').document.root),
+    ].map((n) => n.label);
+    expect(labels).not.toContain('Appearance');
+  });
+
+  it('leads with the pages that read like guidance', () => {
     const { document } = parseWikiWalkthrough(
-      [{ title: 'Wall of Flesh', wikitext: INFOBOX_PAGE, revision: '1' }],
-      { ...OPTIONS, kind: 'wikigg', reveal: 'progressive' },
+      [
+        {
+          title: 'Alexander Booth',
+          wikitext: '== Story ==\nHe was a third mate aboard the ship, from Falmouth.\n',
+          revision: '1',
+        },
+        { title: 'Moorwing', wikitext: GUIDE, revision: '2' },
+      ],
+      { ...OPTIONS, kind: 'fandom', reveal: 'progressive', rank: true },
     );
-    expect(document.root.children.length).toBeGreaterThan(0);
+    const top = document.root.children.map((n) => n.label);
+    expect(top.indexOf('Moorwing')).toBeGreaterThanOrEqual(0);
+    expect(top.indexOf('Moorwing')).toBeLessThan(top.indexOf('Alexander Booth'));
+  });
+
+  it('offers an index of the likely guidance, without removing anything', () => {
+    const { document } = parseWikiWalkthrough(
+      [
+        { title: 'Moorwing', wikitext: GUIDE, revision: '1' },
+        { title: 'Nosk', wikitext: GUIDE.replace('Strategy', 'How to beat it'), revision: '2' },
+        { title: 'Lore', wikitext: '== Story ==\nThe kingdom fell long ago and was forgotten.\n', revision: '3' },
+      ],
+      { ...OPTIONS, kind: 'fandom', reveal: 'progressive', rank: true },
+    );
+    const index = document.root.children[0];
+    expect(index?.label).toBe('Likely guidance');
+    expect((index as SubjectNode).children.length).toBeGreaterThanOrEqual(2);
+
+    // Every entry points at a node that is really there.
+    const ids = new Set([...walk(document.root)].map((n) => n.id));
+    for (const link of (index as SubjectNode).children) {
+      expect(ids.has((link as { targetId: string }).targetId)).toBe(true);
+    }
+    // And the low-scoring page is still in the document, not filtered out.
+    expect(document.root.children.map((n) => n.label)).toContain('Lore');
+  });
+
+  it('leaves StrategyWiki alone', () => {
+    const { document } = parseWikiWalkthrough(
+      [{ title: 'Test Game', wikitext: GUIDE, revision: '1' }],
+      OPTIONS,
+    );
+    // No ranking means no index and no dropped sections.
+    expect([...walk(document.root)].map((n) => n.label)).toContain('Trivia');
   });
 });
 

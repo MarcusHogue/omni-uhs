@@ -11,12 +11,14 @@ import { parseAllPages, parseRightsInfo, parseWikiSearch, apiUrl } from '../src/
 import { NORMALIZE_VECTORS, normalizeTitle } from '../src/catalog/normalize.js';
 import { describeSources, groupEntries } from '../src/catalog/search.js';
 import { fallbackSlugs, hostFromQuery, slugCandidates } from '../src/catalog/discover.js';
+import { scoreCategory } from '../src/catalog/wikipages.js';
 import {
   allowWiki,
   gameTitleOf,
   allowedWikiHosts,
   describeWiki,
   forgetWiki,
+  imageHostsFor,
   isWikiAllowed,
   kindForHost,
   siteTarget,
@@ -395,6 +397,38 @@ describe('source advertisement', () => {
   });
 });
 
+describe('page selection', () => {
+  it('scores a category on the words in its name, wherever they are', () => {
+    // The whole reason the old exact-name list failed: real categories are
+    // "Bosses (Hollow Knight)", not "Bosses".
+    expect(scoreCategory('Bosses (Hollow Knight)', 51)).toBeGreaterThan(0);
+    expect(scoreCategory('Secret rabbits', 18)).toBeGreaterThan(0);
+    expect(scoreCategory('Locations on Timber Hearth', 45)).toBeGreaterThan(0);
+    expect(scoreCategory('Puzzles', 50)).toBeGreaterThan(0);
+  });
+
+  it('rejects the file and maintenance categories that dominate a wiki', () => {
+    // These are the biggest categories on every game wiki and hold no articles.
+    expect(scoreCategory('X HK Screenshots', 1265)).toBe(0);
+    expect(scoreCategory('Non-free files', 592)).toBe(0);
+    expect(scoreCategory('Animal Well egg textures', 65)).toBe(0);
+    expect(scoreCategory('Template documentation', 44)).toBe(0);
+    expect(scoreCategory('Candidates for deletion', 12)).toBe(0);
+  });
+
+  it('rejects a bucket, however promising its name', () => {
+    // A thousand-member "Items" category is a namespace, not a reading list.
+    expect(scoreCategory('Items', 1200)).toBe(0);
+    // ...and a two-member one is usually an accident.
+    expect(scoreCategory('Puzzles', 1)).toBe(0);
+  });
+
+  it('prefers a tighter category and a name that says more', () => {
+    expect(scoreCategory('Boss strategies', 20)).toBeGreaterThan(scoreCategory('Bosses', 20));
+    expect(scoreCategory('Puzzles', 20)).toBeGreaterThan(scoreCategory('Puzzles', 150));
+  });
+});
+
 describe('wiki discovery', () => {
   it('turns a game name into the slugs a wiki might live at', () => {
     expect(slugCandidates('Blue Prince')).toContain('blue-prince');
@@ -481,6 +515,39 @@ describe('wiki registry', () => {
     expect(target.pageBase).toBe('https://animalwell.wiki.gg/wiki/');
     // Carries its own allowlist, or every fetch is rejected as off-list.
     expect(target.allowlist).toEqual(['animalwell.wiki.gg']);
+  });
+
+  describe('imageHostsFor', () => {
+    const site = (host: string, kind: 'fandom' | 'wikigg'): Parameters<typeof imageHostsFor>[0] => ({
+      host,
+      kind,
+      sitename: 'Test Wiki',
+      scriptPath: '',
+      articlePath: '/wiki/$1',
+      license: 'CC-BY-SA',
+      licenseUrl: '',
+      personalUseOnly: false,
+      gamepedia: false,
+    });
+
+    it('adds the shared CDN for Fandom, which does not serve its own bytes', () => {
+      expect(imageHostsFor(site('blue-prince.fandom.com', 'fandom'))).toEqual([
+        'static.wikia.nocookie.net',
+        'blue-prince.fandom.com',
+      ]);
+    });
+
+    it('gives wiki.gg only itself', () => {
+      expect(imageHostsFor(site('animalwell.wiki.gg', 'wikigg'))).toEqual(['animalwell.wiki.gg']);
+    });
+
+    it('never reaches beyond the wiki it was asked about', () => {
+      // The image route hands this list straight to `assertAllowed` with a URL
+      // the client chose, so anything extra in it is an SSRF hole.
+      const hosts = imageHostsFor(site('tunic.fandom.com', 'fandom'));
+      expect(hosts).not.toContain('obradinn.fandom.com');
+      expect(hosts.every((host) => host === 'static.wikia.nocookie.net' || host === 'tunic.fandom.com')).toBe(true);
+    });
   });
 
   it('honours a non-empty script path, as a self-hosted MediaWiki has', () => {
