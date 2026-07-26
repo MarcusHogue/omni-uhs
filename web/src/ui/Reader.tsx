@@ -242,9 +242,14 @@ function SubjectView({ node, revealed, onNavigate }: ViewProps): JSX.Element {
                 <TypeMark type={child.type} /> {child.label || '(untitled)'}
               </span>
               {child.type === 'hints' && (
-                <span className="muted">
-                  {child.hints.length} hint{child.hints.length === 1 ? '' : 's'}
-                  {seen > 0 && ` · ${seen} revealed`}
+                <span className="row-meta muted">
+                  <span>
+                    {child.hints.length} hint{child.hints.length === 1 ? '' : 's'}
+                    {seen > 0 && ` · ${seen} revealed`}
+                  </span>
+                  {/* Only ever shown when the parser had an opinion. Most rows
+                      carry no pill, and that is not a verdict on them. */}
+                  {child.role && <span className="pill">{child.role}</span>}
                 </span>
               )}
             </button>

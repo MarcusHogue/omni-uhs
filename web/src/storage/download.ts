@@ -370,7 +370,7 @@ async function downloadWiki(
     license: site.license,
     personalUseOnly: site.personalUseOnly,
     reveal: 'progressive',
-    skipReferencePages: true,
+    rank: true,
   });
 
   if (result.document.root.children.length === 0) {

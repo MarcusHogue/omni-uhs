@@ -75,6 +75,18 @@ export interface HintGroupNode extends NodeBase {
   label: string;
   /** Revealed strictly one at a time. */
   hints: HintNode[];
+  /**
+   * Advisory only, set by the wiki parser.
+   *
+   * A wiki page is not written to be a hint, and only some of it is. This says
+   * which the section looks like so the reader can lead with the useful part —
+   * it never removes anything, because the signal cannot see a deduction game's
+   * answers at all. See `parser/wikitext/guidance.ts`.
+   *
+   * Absent is the common case and means "no opinion", not "reference".
+   * `reference` is only ever set from the heading, never from a low score.
+   */
+  role?: 'guidance' | 'reference';
 }
 
 export interface HintNode extends NodeBase {

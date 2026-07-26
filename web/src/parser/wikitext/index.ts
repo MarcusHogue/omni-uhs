@@ -22,6 +22,7 @@ import type {
 } from '../ast';
 import { inlineText } from '../ast';
 import { stableId } from '../id';
+import { guidanceRank, isNeverHint, looksLikeGuidance, scoreSection } from './guidance';
 
 export interface WikiPageInput {
   title: string;
@@ -63,10 +64,11 @@ export interface WikiWalkthroughOptions {
   /** Defaults to `as-written`, so existing callers are unaffected. */
   reveal?: RevealMode;
   /**
-   * Drop pages that look like stat tables rather than guidance. Only sensible
-   * with `progressive`; off by default.
+   * Score each section, label it, and lead the document with the ones that read
+   * like guidance. Only sensible with `progressive`; off by default, so
+   * StrategyWiki — which is already written as a walkthrough — is untouched.
    */
-  skipReferencePages?: boolean;
+  rank?: boolean;
 }
 
 /** Templates whose content is a spoiler and must start hidden. */
@@ -406,56 +408,16 @@ export function splitSections(wikitext: string): Section[] {
   return sections.filter((s) => s.title !== '' || s.body.trim() !== '');
 }
 
-/**
- * Does this page read like guidance, or like a database row?
- *
- * A reference wiki's stat pages are mostly infobox templates and tables — the
- * two things `toBlocks` already discards — so a page whose surviving prose is a
- * thin rind around a big template is one we should not be turning into hints.
- * Returns the share of the page's lines that survived as readable prose.
- */
-/** Readable characters left after templates and tables are removed. */
-export function proseChars(wikitext: string): number {
-  return splitSections(stripBlockMarkup(wikitext)).reduce(
-    (total, section) =>
-      total + toBlocks(section.body).reduce((n, b) => n + inlineText(b.content).length, 0),
-    0,
-  );
-}
-
-/** That prose as a share of the raw page. */
-export function proseRatio(wikitext: string): number {
-  const raw = wikitext.replace(/\s+/g, ' ').trim().length;
-  return raw === 0 ? 0 : proseChars(wikitext) / raw;
-}
-
-/**
- * Is this page reference data rather than something to read?
- *
- * Ratio alone is the obvious measure and the wrong one: how much template soup
- * surrounds a page varies enormously, so a genuinely useful page can score low
- * simply for sitting under a big infobox. Blue Prince's *Antechamber* page —
- * one of the most guidance-heavy on that wiki — is 11% prose, and a ratio gate
- * threw it away.
- *
- * What actually separates a stat page is having almost no prose at all, in
- * absolute terms. So both have to be true before a page is dropped, and the
- * bias is deliberately towards keeping: a mediocre page costs a scroll, a
- * dropped guide costs the thing you came for.
- */
-const MIN_PROSE_CHARS = 300;
-const MIN_PROSE_RATIO = 0.15;
-
-export function looksLikeReference(wikitext: string): boolean {
-  return proseChars(wikitext) < MIN_PROSE_CHARS && proseRatio(wikitext) < MIN_PROSE_RATIO;
-}
-
 /** Build the subject tree for one page. */
 function pageToSubject(
   page: WikiPageInput,
   idPrefix: string,
   reveal: RevealMode,
   resolve?: Resolver,
+  /** Score, label and order the sections. Off for StrategyWiki. */
+  rank = false,
+  /** Collects each group's rank, for the index built at the document level. */
+  rankOf: Map<string, number> = new Map(),
 ): SubjectNode {
   const label = page.title.includes('/') ? page.title.slice(page.title.indexOf('/') + 1) : page.title;
   const root: SubjectNode = {
@@ -469,6 +431,11 @@ function pageToSubject(
   let counter = 0;
 
   for (const section of splitSections(stripBlockMarkup(page.wikitext))) {
+    // Filing, not content: references, galleries, track listings. Dropped
+    // rather than ranked — they are only a few per cent of a wiki's prose, but
+    // they are rows, and rows are what you scroll past.
+    if (rank && isNeverHint(section.title)) continue;
+
     const blocks = toBlocks(section.body, resolve);
 
     let target = root;
@@ -504,6 +471,19 @@ function pageToSubject(
             content: block.content,
           })),
         };
+        if (rank) {
+          const signals = scoreSection(
+            section.title || root.label,
+            plain.map((block) => inlineText(block.content)).join(' '),
+          );
+          // Only the positive label is set. Calling everything else
+          // `reference` would put "not a hint" on Obra Dinn's Identification
+          // sections, which are the answers — the score cannot see them, and a
+          // label is a claim the score is not entitled to make. Unlabelled
+          // means "no opinion", and the rank still orders it.
+          if (looksLikeGuidance(signals)) group.role = 'guidance';
+          rankOf.set(group.id!, guidanceRank(signals));
+        }
         target.children.push(group);
       } else {
         const text: TextNode = {
@@ -587,6 +567,77 @@ function pruneDeadLinks(roots: Node[]): void {
   roots.forEach(walkNode);
 }
 
+/** The best rank anywhere under a node — how promising the page looks. */
+function bestRank(node: Node, rankOf: Map<string, number>): number {
+  if (node.type === 'hints') return rankOf.get(node.id ?? '') ?? 0;
+  if (node.type !== 'subject') return -Infinity;
+  return node.children.reduce(
+    (best, child) => Math.max(best, bestRank(child, rankOf)),
+    -Infinity,
+  );
+}
+
+/**
+ * Lead with what reads like guidance, at every level.
+ *
+ * A stable sort, so pages that score the same keep the order the wiki gave
+ * them — which for a chaptered game is the order it should be read in.
+ */
+function orderByGuidance(nodes: Node[], rankOf: Map<string, number>): void {
+  for (const node of nodes) {
+    if (node.type === 'subject') orderByGuidance(node.children, rankOf);
+  }
+  const ranked = nodes.map((node, index) => ({ node, index, rank: bestRank(node, rankOf) }));
+  ranked.sort((a, b) => b.rank - a.rank || a.index - b.index);
+  ranked.forEach((row, position) => {
+    nodes[position] = row.node;
+  });
+}
+
+/** How many entries the index offers before it stops being a shortcut. */
+const INDEX_LIMIT = 20;
+
+/**
+ * A shortcut to the sections most likely to help.
+ *
+ * Sixty pages of wiki is not a hint system, it is a reading list, and the first
+ * question is always "where do I start". This answers it without removing
+ * anything: every page is still there, in full, one tap further away.
+ *
+ * "Likely", because the score is a guess. A deduction game's answers score zero
+ * and will not appear here — they are still on their own pages, which is why
+ * this is an index and not a filter.
+ */
+function guidanceIndex(children: Node[], rankOf: Map<string, number>): SubjectNode | null {
+  const found: { id: string; label: string; rank: number }[] = [];
+  const visit = (node: Node, page: string): void => {
+    if (node.type === 'hints' && node.role === 'guidance' && node.id) {
+      const rank = rankOf.get(node.id) ?? 0;
+      // The page name is the useful half: "Room 46 — Puzzle" locates it, and a
+      // bare "Puzzle" repeated eleven times does not.
+      const label = node.label === page ? page : `${page} — ${node.label}`;
+      found.push({ id: node.id, label, rank });
+    }
+    if (node.type === 'subject') for (const child of node.children) visit(child, page);
+  };
+  for (const child of children) visit(child, child.type === 'subject' ? child.label : '');
+
+  if (found.length < 2) return null;
+  found.sort((a, b) => b.rank - a.rank || a.label.localeCompare(b.label));
+
+  return {
+    id: 'p:guidance',
+    type: 'subject',
+    label: 'Likely guidance',
+    children: found.slice(0, INDEX_LIMIT).map((row, i) => ({
+      id: `p:guidance:${i}`,
+      type: 'link' as const,
+      label: row.label,
+      targetId: row.id,
+    })),
+  };
+}
+
 export function parseWikiWalkthrough(
   pages: WikiPageInput[],
   options: WikiWalkthroughOptions,
@@ -605,24 +656,24 @@ export function parseWikiWalkthrough(
       return false;
     }
     if (/^#\s*REDIRECT/i.test(page.wikitext.trim())) return false;
-    if (options.skipReferencePages && looksLikeReference(page.wikitext)) {
-      // Named, not silent: "why is that page missing" is a fair question.
-      warnings.push(
-        `${page.title}: skipped, reads as reference data rather than guidance ` +
-          `(${proseChars(page.wikitext)} characters of prose)`,
-      );
-      return false;
-    }
     void index;
     return true;
   });
 
   const pageIds = new Map(kept.map((page, index) => [normalizePageTitle(page.title), `p:${index}`]));
   const resolve = (title: string): string | undefined => pageIds.get(title);
+  const rank = options.rank ?? false;
+  const rankOf = new Map<string, number>();
 
   kept.forEach((page, index) => {
-    const subject = pageToSubject(page, `p:${index}`, reveal, resolve);
+    const subject = pageToSubject(page, `p:${index}`, reveal, resolve, rank, rankOf);
     if (subject.children.length > 0) children.push(subject);
+    else if (rank) {
+      // Everything on it was a gallery, a table, or a references list. Worth
+      // saying: "why is that page not here" is a fair question, and silence
+      // makes it look like the download failed.
+      warnings.push(`${page.title}: nothing on it reads as content`);
+    }
   });
 
   // A page can still come out empty — every section a table, say — so anything
@@ -637,6 +688,12 @@ export function parseWikiWalkthrough(
     options.documentUrl ??
     `${options.baseUrl}${encodeURIComponent(options.gameTitle.replace(/ /g, '_'))}`;
   const revision = first?.revision ?? null;
+
+  if (rank) {
+    orderByGuidance(children, rankOf);
+    const index = guidanceIndex(children, rankOf);
+    if (index) children.unshift(index);
+  }
 
   const root: SubjectNode =
     children.length === 1 && children[0]!.type === 'subject'
