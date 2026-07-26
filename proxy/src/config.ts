@@ -97,6 +97,16 @@ export const config = {
   /** Politeness: at most this many in-flight requests per upstream host. */
   perHostConcurrency: int(process.env['UPSTREAM_CONCURRENCY'], 2),
 
+  /**
+   * Cap on a single wiki picture, in bytes.
+   *
+   * A 640px thumbnail of a puzzle scan runs about 30 KB; the largest original
+   * measured on Blue Prince was 4.2 MB. This is a backstop against a client
+   * asking for something enormous, not a size policy — the client picks the
+   * width it wants and keeps its own budget.
+   */
+  imageMaxBytes: int(process.env['IMAGE_MAX_BYTES'], 4 * 1024 * 1024),
+
   /** Give up on a single upstream request after this long. */
   requestTimeoutMs: int(process.env['UPSTREAM_TIMEOUT_MS'], 60_000),
 

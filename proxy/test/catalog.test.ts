@@ -18,6 +18,7 @@ import {
   allowedWikiHosts,
   describeWiki,
   forgetWiki,
+  imageHostsFor,
   isWikiAllowed,
   kindForHost,
   siteTarget,
@@ -514,6 +515,39 @@ describe('wiki registry', () => {
     expect(target.pageBase).toBe('https://animalwell.wiki.gg/wiki/');
     // Carries its own allowlist, or every fetch is rejected as off-list.
     expect(target.allowlist).toEqual(['animalwell.wiki.gg']);
+  });
+
+  describe('imageHostsFor', () => {
+    const site = (host: string, kind: 'fandom' | 'wikigg'): Parameters<typeof imageHostsFor>[0] => ({
+      host,
+      kind,
+      sitename: 'Test Wiki',
+      scriptPath: '',
+      articlePath: '/wiki/$1',
+      license: 'CC-BY-SA',
+      licenseUrl: '',
+      personalUseOnly: false,
+      gamepedia: false,
+    });
+
+    it('adds the shared CDN for Fandom, which does not serve its own bytes', () => {
+      expect(imageHostsFor(site('blue-prince.fandom.com', 'fandom'))).toEqual([
+        'static.wikia.nocookie.net',
+        'blue-prince.fandom.com',
+      ]);
+    });
+
+    it('gives wiki.gg only itself', () => {
+      expect(imageHostsFor(site('animalwell.wiki.gg', 'wikigg'))).toEqual(['animalwell.wiki.gg']);
+    });
+
+    it('never reaches beyond the wiki it was asked about', () => {
+      // The image route hands this list straight to `assertAllowed` with a URL
+      // the client chose, so anything extra in it is an SSRF hole.
+      const hosts = imageHostsFor(site('tunic.fandom.com', 'fandom'));
+      expect(hosts).not.toContain('obradinn.fandom.com');
+      expect(hosts.every((host) => host === 'static.wikia.nocookie.net' || host === 'tunic.fandom.com')).toBe(true);
+    });
   });
 
   it('honours a non-empty script path, as a self-hosted MediaWiki has', () => {

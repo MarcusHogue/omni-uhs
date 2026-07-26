@@ -6,6 +6,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 
 import type { FastifyInstance } from 'fastify';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -211,6 +212,134 @@ describe('/api/wiki/:host', () => {
     });
     expect(response.statusCode).toBe(400);
     expect(response.json().hint).toMatch(/WIKI_ALLOWLIST/);
+  });
+});
+
+/**
+ * The image route is the only place a client-supplied absolute URL reaches the
+ * fetcher, so every one of its refusals is tested — a hole here is an SSRF hole.
+ */
+describe('/api/wiki/:host/image', () => {
+  const HOST = 'blue-prince.fandom.com';
+
+  /** Put a wiki on the allowlist without going near the network. */
+  function seedWiki(): void {
+    cache.db.exec(`
+      CREATE TABLE IF NOT EXISTS wiki_site (
+        host TEXT PRIMARY KEY, kind TEXT NOT NULL, sitename TEXT NOT NULL,
+        script_path TEXT NOT NULL, article_path TEXT NOT NULL, license TEXT NOT NULL,
+        license_url TEXT NOT NULL, personal_use INTEGER NOT NULL,
+        gamepedia INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+      CREATE TABLE IF NOT EXISTS wiki_allow (
+        host TEXT PRIMARY KEY, kind TEXT NOT NULL, added_at INTEGER NOT NULL);
+    `);
+    cache.db
+      .prepare('INSERT OR REPLACE INTO wiki_allow (host, kind, added_at) VALUES (?, ?, ?)')
+      .run(HOST, 'fandom', Date.now());
+    cache.db
+      .prepare(
+        `INSERT OR REPLACE INTO wiki_site
+           (host, kind, sitename, script_path, article_path, license, license_url,
+            personal_use, gamepedia, updated_at)
+         VALUES (?, 'fandom', 'Blue Prince Wiki', '', '/wiki/$1', 'CC-BY-SA', '', 0, 0, ?)`,
+      )
+      .run(HOST, Date.now());
+  }
+
+  const ask = (url: string, host = HOST): Promise<{ statusCode: number; json: () => never }> =>
+    app.inject({
+      method: 'GET',
+      url: `/api/wiki/${host}/image?url=${encodeURIComponent(url)}`,
+    }) as never;
+
+  it('rejects a wiki that is not allowlisted', async () => {
+    const response = await ask('https://static.wikia.nocookie.net/x/Door.png', 'evil.example.com');
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('needs a url', async () => {
+    seedWiki();
+    const response = await app.inject({ method: 'GET', url: `/api/wiki/${HOST}/image` });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatch(/url is required/);
+  });
+
+  it('refuses a host that is not one of this wiki\'s image hosts', async () => {
+    seedWiki();
+    for (const url of [
+      'https://evil.example.com/Door.png',
+      'http://169.254.169.254/latest/meta-data/x.png',
+      'http://127.0.0.1:8080/Door.png',
+      // Another allowlisted *wiki* is still not this wiki's image host.
+      'https://animalwell.wiki.gg/images/Door.png',
+      // The classic confusion attack: the real host is evil.test.
+      'https://static.wikia.nocookie.net@evil.test/Door.png',
+      'file:///etc/passwd.png',
+    ]) {
+      expect((await ask(url)).statusCode).toBe(400);
+    }
+  });
+
+  it('refuses a URL whose path names no picture', async () => {
+    seedWiki();
+    for (const url of [
+      'https://static.wikia.nocookie.net/blue-prince/etc/passwd',
+      'https://static.wikia.nocookie.net/blue-prince/images/Theme.ogg',
+      'https://blue-prince.fandom.com/api.php?action=query',
+    ]) {
+      const response = await ask(url);
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error).toMatch(/only image URLs/);
+    }
+  });
+
+  /** A thumbnail URL of the shape Fandom's API actually hands out. */
+  const THUMB =
+    'https://static.wikia.nocookie.net/blue-prince/images/a/ab/Door.png/revision/latest/scale-to-width-down/640?cb=2025';
+
+  it('accepts a thumbnail whose extension is mid-path, and narrows the allowlist', async () => {
+    seedWiki();
+    const fetch = vi.spyOn(cache, 'fetch').mockResolvedValue({
+      path: '',
+      contentType: 'image/png',
+      size: 30_000,
+      fromCache: false,
+    } as never);
+    vi.spyOn(cache, 'stream').mockReturnValue(Readable.from([Buffer.from('png')]));
+
+    const response = await ask(THUMB);
+    expect(response.statusCode).toBe(200);
+    // `endsWith('.png')` would have rejected this before the fetch ever ran.
+    expect(fetch).toHaveBeenCalledOnce();
+    expect(fetch.mock.calls[0]![0]!.allowlist).toEqual([
+      'static.wikia.nocookie.net',
+      'blue-prince.fandom.com',
+    ]);
+  });
+
+  it('will not pass off a non-image as one', async () => {
+    seedWiki();
+    vi.spyOn(cache, 'fetch').mockResolvedValue({
+      path: '',
+      contentType: 'text/html',
+      size: 900,
+      fromCache: false,
+    } as never);
+    const response = await ask(THUMB);
+    expect(response.statusCode).toBe(502);
+    expect(response.json().error).toMatch(/not an image/);
+  });
+
+  it('refuses an image over the cap', async () => {
+    seedWiki();
+    vi.spyOn(cache, 'fetch').mockResolvedValue({
+      path: '',
+      contentType: 'image/png',
+      size: 40 * 1024 * 1024,
+      fromCache: false,
+    } as never);
+    const response = await ask(THUMB);
+    expect(response.statusCode).toBe(413);
   });
 });
 

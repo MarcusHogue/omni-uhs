@@ -358,6 +358,22 @@ export async function targetFor(cache: Cache, host: string): Promise<WikiTarget>
   return siteTarget(site);
 }
 
+/**
+ * Where a wiki's image bytes actually live.
+ *
+ * Fandom serves them from a shared CDN — `static.wikia.nocookie.net` — and not
+ * from the wiki's own hostname, so `imageinfo` on `blue-prince.fandom.com`
+ * hands back a URL that the wiki's own one-host allowlist would reject.
+ * wiki.gg serves its own. Both answer anonymously.
+ *
+ * Deliberately a *narrow* per-request list rather than an addition to
+ * `UPSTREAM_ALLOWLIST`: this is the only route that takes an absolute URL from
+ * the client, so it gets the smallest allowlist that can work and no larger.
+ */
+export function imageHostsFor(site: WikiSite): string[] {
+  return site.kind === 'fandom' ? ['static.wikia.nocookie.net', site.host] : [site.host];
+}
+
 /** Pure form, for tests and for callers that already hold a `WikiSite`. */
 export function siteTarget(site: WikiSite): WikiTarget {
   return {
