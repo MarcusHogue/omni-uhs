@@ -260,6 +260,41 @@ export async function strategyWikiDirect<T>(
   return (await response.json()) as T;
 }
 
+/**
+ * One wiki, as the download layer needs to talk to it.
+ *
+ * Reading a wiki is two calls — an API query and a picture fetch — and until now
+ * both were reached by passing a hostname to `api.wiki`/`api.wikiImage`. That
+ * only ever worked because every wiki went through the same route. StrategyWiki
+ * does not: it is bot-challenged at the proxy and falls back to the browser, so
+ * a hostname is no longer enough to say *how* to reach a wiki.
+ *
+ * Passing the pair around instead lets `expandTemplates` and `fetchImages` work
+ * against any source without knowing which, and makes them testable with a plain
+ * object rather than a module mock.
+ */
+export interface WikiTransport {
+  /** For warnings, and for the storage key. Not used to route anything. */
+  host: string;
+  query<T>(params: Record<string, string>, signal?: AbortSignal): Promise<T>;
+  image(url: string, signal?: AbortSignal): Promise<{ bytes: Uint8Array; mime: string }>;
+}
+
+/** Fandom and wiki.gg: everything through the proxy, which is allowlisted. */
+export function wikiTransport(host: string): WikiTransport {
+  return {
+    host,
+    query: (params, signal) => api.wiki(host, params, signal),
+    image: (url, signal) => api.wikiImage(host, url, signal),
+  };
+}
+
+export const strategyWikiTransport: WikiTransport = {
+  host: 'strategywiki.org',
+  query: (params, signal) => api.strategyWiki(params, signal),
+  image: (url, signal) => api.strategyWikiImage(url, signal),
+};
+
 export const api = {
   search(query: string, sources?: SourceKind[], signal?: AbortSignal): Promise<SearchResponse> {
     const params = new URLSearchParams({ q: query });
@@ -408,7 +443,75 @@ export const api = {
     }
   },
 
-  /** `list=allpages` run from the browser, for when the proxy is challenged. */
+  /**
+   * The bytes of one StrategyWiki picture.
+   *
+   * Proxy first, for the caching and the politeness, then the browser — the same
+   * order and the same reason as `strategyWiki` above. The browser attempt is
+   * expected to fail more often than it succeeds: unlike `api.php`, MediaWiki's
+   * upload directory sends no `Access-Control-Allow-Origin`, so a cross-origin
+   * read of the bytes is at the site's discretion and StrategyWiki may simply
+   * not allow it. It costs one request to find out, and the alternative is
+   * declaring pictures impossible on this source without having tried.
+   *
+   * Either way the failure is visible rather than silent: `fetchImages` marks
+   * the node `unavailable` and the reader shows the caption and a link out.
+   */
+  async strategyWikiImage(
+    url: string,
+    signal?: AbortSignal,
+  ): Promise<{ bytes: Uint8Array; mime: string }> {
+    try {
+      const response = await fetch(`/api/strategywiki/image?url=${encodeURIComponent(url)}`, {
+        signal,
+      });
+      if (!response.ok) {
+        const body = (await response.json().catch(() => ({}))) as {
+          error?: string;
+          code?: string;
+        };
+        throw new ApiError(
+          body.error ?? `Image failed (${response.status})`,
+          response.status,
+          body.code,
+        );
+      }
+      return {
+        bytes: new Uint8Array(await response.arrayBuffer()),
+        mime: response.headers.get('content-type')?.split(';')[0] ?? 'application/octet-stream',
+      };
+    } catch (error) {
+      if ((error as Error).name === 'AbortError') throw error;
+      if (!isChallengeError(error)) throw error;
+
+      let direct: Response;
+      try {
+        direct = await fetch(url, { signal, credentials: 'omit', mode: 'cors' });
+      } catch (cause) {
+        if ((cause as Error).name === 'AbortError') throw cause;
+        throw new ApiError(
+          'StrategyWiki bot-challenged the proxy, and this browser is not allowed to read its images directly.',
+          0,
+        );
+      }
+      if (!direct.ok) {
+        throw new ApiError(`StrategyWiki refused this browser too (${direct.status}).`, direct.status);
+      }
+      return {
+        bytes: new Uint8Array(await direct.arrayBuffer()),
+        mime: direct.headers.get('content-type')?.split(';')[0] ?? 'application/octet-stream',
+      };
+    }
+  },
+
+  /**
+   * `list=allpages` run from the browser, for when the proxy is challenged.
+   *
+   * Collapsed to one row per game, exactly as the proxy's listing is: a game is
+   * a tree of sub-pages here, and every one of its Download buttons downloads
+   * the whole tree, so showing forty of them offered a choice that does not
+   * exist.
+   */
   async listStrategyWikiDirect(
     prefix: string,
     signal?: AbortSignal,
@@ -425,15 +528,20 @@ export const api = {
       },
       signal,
     );
-    return (payload.query?.allpages ?? [])
-      .map((page) => page.title)
-      .filter((title): title is string => Boolean(title))
-      .map((title) => ({
-        sourceKind: 'strategywiki' as const,
-        title,
-        normalizedTitle: normalizeTitle(title.split('/')[0]!),
-        ref: title,
-      }));
+    const games = new Map<string, CatalogEntry>();
+    for (const page of payload.query?.allpages ?? []) {
+      const game = page.title?.split('/')[0]?.trim();
+      if (!game) continue;
+      const normalizedTitle = normalizeTitle(game);
+      if (games.has(normalizedTitle)) continue;
+      games.set(normalizedTitle, {
+        sourceKind: 'strategywiki',
+        title: game,
+        normalizedTitle,
+        ref: game,
+      });
+    }
+    return [...games.values()];
   },
 
   /** `list=search` run from the browser, for when the proxy is challenged. */

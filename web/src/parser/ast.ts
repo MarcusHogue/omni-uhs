@@ -60,6 +60,7 @@ export type Node =
   | SubjectNode
   | HintGroupNode
   | TextNode
+  | TableNode
   | ImageNode
   | LinkNode;
 
@@ -102,12 +103,54 @@ export interface HintNode extends NodeBase {
    * must not be rendered until the hint above it has been revealed by a tap.
    */
   images?: ImageNode[];
+  /**
+   * Tables that belong to this step.
+   *
+   * Same reasoning as the pictures, and the same necessity: a table inside a
+   * `{{spoiler}}` is an answer, so it cannot be a sibling of the hint group the
+   * way an ordinary table is — it has to be behind the same tap.
+   */
+  tables?: TableNode[];
 }
 
 export interface TextNode extends NodeBase {
   type: 'text';
   label: string;
   content: Inline[];
+  /**
+   * Pictures the section referred to.
+   *
+   * Mirrors `HintNode.images`, and for the same reason: a StrategyWiki page
+   * reads as written, so its prose becomes a `text` node rather than a hint —
+   * and without this the pictures on it were parsed, then quietly dropped on
+   * the floor. Nothing hides them behind a reveal here, because nothing on such
+   * a page is hidden in the first place.
+   */
+  images?: ImageNode[];
+}
+
+/**
+ * A wiki table, kept as a table.
+ *
+ * These were being erased. The parser's block-markup stripper kept only the
+ * newlines inside `{| … |}`, on the reasonable theory that a table is layout —
+ * and on Fandom it mostly is. On StrategyWiki it is the content: `Chrono
+ * Trigger/Inns` is *nothing but* a table of fourteen inns, their eras and their
+ * prices, and it downloaded as an empty page. So do Equipment and items,
+ * Markets, Tabs, Bosses, Experience, Formulae and Techniques — most of the
+ * appendices of most games.
+ *
+ * Cells are `Inline[]` rather than strings so a link inside one stays a link:
+ * these tables cross-reference the walkthrough constantly.
+ */
+export interface TableNode extends NodeBase {
+  type: 'table';
+  /** The table's caption, or the heading it sat under. */
+  label: string;
+  /** `!` cells. Empty when the table has no header row. */
+  headers: Inline[][];
+  /** `rows[r][c]` is one cell. Ragged rows are kept as they came. */
+  rows: Inline[][][];
 }
 
 export interface Hotspot {
@@ -188,6 +231,9 @@ export function isText(n: Node): n is TextNode {
 export function isImage(n: Node): n is ImageNode {
   return n.type === 'image';
 }
+export function isTable(n: Node): n is TableNode {
+  return n.type === 'table';
+}
 export function isLink(n: Node): n is LinkNode {
   return n.type === 'link';
 }
@@ -201,7 +247,10 @@ export function* walk(node: Node): Generator<Node> {
     for (const hint of node.hints) {
       for (const nested of hint.nested ?? []) yield* walk(nested);
       for (const image of hint.images ?? []) yield* walk(image);
+      for (const table of hint.tables ?? []) yield* walk(table);
     }
+  } else if (node.type === 'text') {
+    for (const image of node.images ?? []) yield* walk(image);
   } else if (node.type === 'image') {
     for (const hotspot of node.hotspots ?? []) yield* walk(hotspot.target);
   }

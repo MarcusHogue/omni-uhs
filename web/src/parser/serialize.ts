@@ -48,6 +48,19 @@ const DATA_PREFIX = 'base64:';
 
 type SerializedNode = Omit<Node, 'data'> & { data?: string };
 
+/**
+ * Pictures hang off three node types now, and every one of them has to be
+ * walked.
+ *
+ * `hint.images` was already being skipped: `JSON.stringify` turns a `Uint8Array`
+ * into `{}`, so an exported picture came back with no `data` and no way to tell
+ * it apart from one that never had any. It went unnoticed because a wiki
+ * picture's bytes live in the `images` store and the node's own `data` is empty
+ * — but a UHS picture's are not, and `text.images` has just joined the list.
+ */
+const serializeImages = (images: ImageNode[] | undefined): unknown[] | undefined =>
+  images?.map(serializeNode);
+
 function serializeNode(node: Node): unknown {
   if (node.type === 'image') {
     const { data, ...rest } = node;
@@ -56,14 +69,17 @@ function serializeNode(node: Node): unknown {
   if (node.type === 'subject') {
     return { ...node, children: node.children.map(serializeNode) };
   }
+  if (node.type === 'text') {
+    return node.images ? { ...node, images: serializeImages(node.images) } : node;
+  }
   if (node.type === 'hints') {
     return {
       ...node,
-      hints: node.hints.map((hint) =>
-        hint.nested
-          ? { ...hint, nested: hint.nested.map(serializeNode) }
-          : hint,
-      ),
+      hints: node.hints.map((hint) => ({
+        ...hint,
+        ...(hint.nested ? { nested: hint.nested.map(serializeNode) } : {}),
+        ...(hint.images ? { images: serializeImages(hint.images) } : {}),
+      })),
     };
   }
   return node;
@@ -85,15 +101,16 @@ function deserializeNode(value: unknown): Node {
       children: (node['children'] as unknown[]).map(deserializeNode),
     };
   }
+  if (node['type'] === 'text') {
+    if (!node['images']) return node as unknown as Node;
+    return { ...node, images: (node['images'] as unknown[]).map(deserializeNode) } as unknown as Node;
+  }
   if (node['type'] === 'hints') {
-    const hints = (node['hints'] as Record<string, unknown>[]).map((hint) =>
-      hint['nested']
-        ? {
-            ...hint,
-            nested: (hint['nested'] as unknown[]).map(deserializeNode),
-          }
-        : hint,
-    );
+    const hints = (node['hints'] as Record<string, unknown>[]).map((hint) => ({
+      ...hint,
+      ...(hint['nested'] ? { nested: (hint['nested'] as unknown[]).map(deserializeNode) } : {}),
+      ...(hint['images'] ? { images: (hint['images'] as unknown[]).map(deserializeNode) } : {}),
+    }));
     return { ...node, hints } as unknown as Node;
   }
   return node as unknown as Node;

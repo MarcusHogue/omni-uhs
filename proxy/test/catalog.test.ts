@@ -7,7 +7,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Cache } from '../src/cache/index.js';
 import { parseMasterIndex } from '../src/catalog/ifarchive.js';
 import { parseIfdbSearch } from '../src/catalog/ifdb.js';
-import { parseAllPages, parseRightsInfo, parseWikiSearch, apiUrl } from '../src/catalog/mediawiki.js';
+import {
+  apiUrl,
+  collapseToGames,
+  parseAllPages,
+  parseRightsInfo,
+  parseWikiSearch,
+} from '../src/catalog/mediawiki.js';
 import { NORMALIZE_VECTORS, normalizeTitle } from '../src/catalog/normalize.js';
 import { describeSources, groupEntries } from '../src/catalog/search.js';
 import { fallbackSlugs, hostFromQuery, slugCandidates } from '../src/catalog/discover.js';
@@ -207,6 +213,28 @@ describe('MediaWiki', () => {
     expect(parseAllPages(json, 'strategywiki').map((e) => e.ref)).toEqual([
       'Myst/Walkthrough',
       'Myst/Channelwood',
+    ]);
+  });
+
+  it('collapses a game\'s pages into one browse row', () => {
+    // Browsing "Chrono Trigger" used to list forty sub-pages, each with its own
+    // Download button — and all forty downloaded the identical thing, because
+    // the download takes the game out of whatever ref it is handed. One row.
+    const entries = parseAllPages(
+      JSON.stringify({
+        query: {
+          allpages: [
+            { title: 'Myst/Walkthrough' },
+            { title: 'Myst/Channelwood' },
+            { title: 'Myst III: Exile/Walkthrough' },
+          ],
+        },
+      }),
+      'strategywiki',
+    );
+    expect(collapseToGames(entries).map((e) => [e.title, e.ref])).toEqual([
+      ['Myst', 'Myst'],
+      ['Myst III: Exile', 'Myst III: Exile'],
     ]);
   });
 

@@ -20,6 +20,7 @@ import type {
   ParseResult,
   SourceKind,
   SubjectNode,
+  TableNode,
   TextNode,
 } from '../ast';
 import { inlineText } from '../ast';
@@ -27,6 +28,8 @@ import { stableId } from '../id';
 import { guidanceRank, isNeverHint, looksLikeGuidance, scoreSection } from './guidance';
 import type { ImageRef } from './images';
 import { extractGalleries, findFileLinks, splitParams, stripFileLinks } from './images';
+import type { TableRef } from './tables';
+import { extractTables, takeMarkers } from './tables';
 
 export interface WikiPageInput {
   title: string;
@@ -74,11 +77,12 @@ export interface WikiWalkthroughOptions {
    */
   rank?: boolean;
   /**
-   * Record the pictures each hint refers to, for the storage layer to fetch.
+   * Record the pictures each section refers to, for the storage layer to fetch.
    *
-   * Off by default. StrategyWiki's fallback path reads the wiki straight from
-   * the browser and cannot fetch image bytes at all, so turning this on there
-   * would produce references that never resolve.
+   * Off by default, so the UHS and IF Archive paths are unaffected. Both reveal
+   * modes honour it: a `progressive` page hangs its pictures off the hint that
+   * mentioned them, an `as-written` one off the `text` node, and a reference
+   * that could not be fetched still renders as a caption and a link out.
    */
   images?: boolean;
   /**
@@ -94,10 +98,51 @@ export interface WikiWalkthroughOptions {
    * See `collectExpandable`, which says which calls are worth asking about.
    */
   expanded?: Record<string, string>;
+  /**
+   * Named groups of pages, in the order they should appear.
+   *
+   * StrategyWiki's Table of Contents does not just order a game, it *shapes*
+   * one: Walkthrough, Appendices, Gameplay, Enemies, Statistics. Given those,
+   * the document opens on five landmarks instead of a forty-five-row scroll,
+   * and "include the appendices" becomes a labelled section rather than a run
+   * of pages trailing the walkthrough.
+   *
+   * Pages not named by any group follow them, ungrouped. Absent, every page is
+   * a child of the document root exactly as before.
+   */
+  groups?: { title: string; pages: string[] }[];
 }
 
 /** Templates whose content is a spoiler and must start hidden. */
 const SPOILER_TEMPLATES = /^(spoiler|hidden|collapse|mbox spoiler)/i;
+
+/**
+ * Navigation furniture, on every StrategyWiki page.
+ *
+ * `{{Header Nav}}` and `{{Footer Nav}}` expand to a nav bar, never to a phrase,
+ * so asking the wiki about them is a request per page spent on something that
+ * gets thrown away at the far end anyway. The `Footer Nav` is not wasted
+ * everywhere — `./strategywiki` reads the reading order out of it — but that
+ * happens on the raw wikitext, before any of this.
+ */
+const NAV_TEMPLATE = /^(header|footer)[ _]nav\b/i;
+
+/**
+ * Templates that arrange a page rather than say anything on it.
+ *
+ * Needed because `templateText` reads a lone unnamed parameter as the word the
+ * template stands in for, and that is right for `{{roomtype|Puzzle}}` and wrong
+ * for `{{floatingtoc|left}}` — where "left" is a position, and went into the
+ * prose of every Chrono Trigger chapter as a word. Nothing about the *value*
+ * separates the two cases: "left" is a short lowercase word with letters in it,
+ * exactly like "Puzzle". Only the name does.
+ *
+ * `{{-}}` is a float clear, `{{col}}`/`{{listcol}}` are the column layout the
+ * Table of Contents is built from, and `{{control selector}}` is the SNES/DS
+ * switcher at the top of a page.
+ */
+const LAYOUT_TEMPLATE =
+  /^(-|clear|floatingtoc|toc|col|listcol|subtoc\d?|control selector|featured|stub|prettytable)$/i;
 
 /**
  * Namespaced links that are filing, not prose.
@@ -225,12 +270,65 @@ export function stripMarkup(text: string, expanded: Record<string, string> = {})
     // Templates go too. Without this a section title kept them verbatim, and
     // Obra Dinn's transcript headings read `Transcript {{play|End_pt1.ogg}}`.
     extractTemplates(removed(text), expanded).text
+      // A label that *was* a template has just been emptied: StrategyWiki writes
+      // `[[../Tabs|{{ctcontrol|Power Tab|Strength Capsule}}]]`, and dropping the
+      // template leaves `[[../Tabs|]]`, which neither pattern below matches — so
+      // the residue `../Tabs|` reached a section heading verbatim. Closing it up
+      // first makes it a plain link, and the target's own name stands in.
+      .replace(/\[\[([^\]|]+)\|\s*\]\]/g, '[[$1]]')
       .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
-      .replace(/\[\[([^\]]+)\]\]/g, '$1'),
+      .replace(/\[\[([^\]]+)\]\]/g, (_, target: string) => linkLeaf(target)),
   ).trim();
 }
 
 const WIKILINK = /\[\[([^\]|]+)(?:\|([^\]]+))?\]\]/g;
+
+/**
+ * What to call a link that has no label of its own.
+ *
+ * `[[Chrono Trigger/Characters#Lavos]]` is a pointer to a *section of a
+ * sub-page*, and printing it whole puts a file path in the middle of a sentence.
+ * The last segment is the part a reader recognises, and it is what MediaWiki
+ * itself displays for a `[[/Sub]]` link.
+ */
+function linkLeaf(target: string): string {
+  const withoutAnchor = target.split('#')[0]!.trim() || target.trim();
+  const leaf = withoutAnchor.replace(/^[./]+/, '').split('/').pop() ?? withoutAnchor;
+  return (leaf || withoutAnchor).replace(/_/g, ' ');
+}
+
+/**
+ * Resolve a link the way MediaWiki resolves it on a given page.
+ *
+ * StrategyWiki's house style is relative: `Chrono Trigger/The Millennial Fair`
+ * refers to its sibling as `[[../Characters#Crono|Crono]]`, not by full title.
+ * Left alone, that normalises to `../Characters`, which matches no downloaded
+ * page — so every cross-reference inside a StrategyWiki game silently stopped
+ * being a link and became plain text. There are dozens per chapter.
+ *
+ * `../X` is a sibling (up one level from the current page), `/X` is a child.
+ * Without a page to resolve against — which is every caller outside a page
+ * parse — the link is returned as it was.
+ */
+export function resolveRelative(target: string, pageTitle = ''): string {
+  const trimmed = target.trim();
+  if (!pageTitle) return trimmed;
+
+  if (trimmed.startsWith('/')) return pageTitle + trimmed;
+  if (!trimmed.startsWith('../')) return trimmed;
+
+  // Each `../` climbs one level from the current page's own path.
+  let base = pageTitle;
+  let rest = trimmed;
+  while (rest.startsWith('../')) {
+    rest = rest.slice(3);
+    const cut = base.lastIndexOf('/');
+    if (cut === -1) break;
+    base = base.slice(0, cut);
+  }
+  // A bare `..` with no remainder means the parent page itself.
+  return rest ? `${base}/${rest}` : base;
+}
 
 /** How MediaWiki itself compares two page titles. */
 export function normalizePageTitle(title: string): string {
@@ -251,6 +349,8 @@ export function normalizePageTitle(title: string): string {
 export function toInline(
   text: string,
   resolve?: (title: string) => string | undefined,
+  /** The page this text is on, so `[[../Sibling]]` can be resolved against it. */
+  pageTitle = '',
 ): Inline[] {
   const source = removed(text);
   const out: Inline[] = [];
@@ -268,8 +368,12 @@ export function toInline(
     index = match.index + match[0].length;
 
     const target = match[1]!;
-    const label = cleaned(match[2] ?? target).trim();
-    const targetId = resolve?.(normalizePageTitle(target));
+    // A label whose whole content was a template is empty by the time it gets
+    // here — `[[../Tabs|{{ctcontrol|Power Tab|Strength Capsule}}]]` — and
+    // pushing nothing deleted the pointer along with the words. The target's
+    // own leaf name is what MediaWiki would have shown without a label.
+    const label = cleaned(match[2] ?? target).trim() || linkLeaf(target);
+    const targetId = resolve?.(normalizePageTitle(resolveRelative(target, pageTitle)));
     if (targetId && label) out.push({ kind: 'link', label, targetId });
     else push(label);
   }
@@ -327,6 +431,7 @@ function templateText(buffer: string): string | null {
   // like a lone unnamed parameter — so the reader was shown `Moss]]`.
   const parts = splitParams(buffer);
   const name = parts[0]!.trim();
+  if (LAYOUT_TEMPLATE.test(name)) return null;
   const unnamed = parts.slice(1).filter((part) => !part.includes('='));
   if (unnamed.length === 0) return null;
   if (unnamed.length > 1 && !TEXT_TEMPLATE.test(name)) return null;
@@ -383,12 +488,99 @@ function expandedText(buffer: string, expanded: Record<string, string>): string 
  */
 const PAGE_CONTEXT = /\b(PAGENAME|SUBPAGENAME|FULLPAGENAME|BASEPAGENAME|NAMESPACE|REVISIONID|SITENAME)\b/;
 
+/**
+ * The pages a page links to, in the order it links to them.
+ *
+ * For a walkthrough the order is the whole value — one sorted alphabetically is
+ * not a walkthrough — and `prop=links` cannot supply it, because the API returns
+ * links alphabetically. So it has to come from the wikitext.
+ *
+ * This is the *second* place StrategyWiki's order can be read from, not the
+ * first: `Chrono Trigger/Walkthrough` is prose, and the chain is in the
+ * `{{Footer Nav}}` at the foot of each chapter (see `./strategywiki`). Some
+ * games do write their Walkthrough page as an index, and this reads those.
+ *
+ * Deliberately not `toInline`, which resolves against a set of already-known
+ * pages; here the links are what *decides* the set. Section headings come back
+ * too, so a caller can tell where a run of links sits — which is how the
+ * appendices are found without hard-coding their titles.
+ */
+export interface OrderedLink {
+  /** Normalised page title, as MediaWiki would compare it. */
+  title: string;
+  /** The nearest heading above this link, or '' in the lead. */
+  section: string;
+}
+
+export interface OrderedLinkOptions {
+  /**
+   * Read the links inside templates too, and take headings from `{{h2|…}}`.
+   *
+   * Off by default, because on an ordinary page a template is a navigation box
+   * whose links are not that page's ordering. On a Table of Contents the
+   * opposite is true: the templates *are* the ordering. StrategyWiki wraps the
+   * whole numbered chapter list in `{{listcol|list=# [[…]] …}}`, which is
+   * multi-line and has no recognised body parameter, so stripping it deleted
+   * all twenty-eight chapters of Chrono Trigger in one go.
+   */
+  raw?: boolean;
+  /** Resolve `[[../Sibling]]` against this page. */
+  pageTitle?: string;
+}
+
+/** `{{h2|Appendices}}` and `{{h2|[[Portal/Gameplay|Gameplay]]}}`. */
+const TEMPLATE_HEADING = /^\s*\{\{\s*h([1-6])\s*\|/i;
+
+export function orderedLinks(
+  wikitext: string,
+  options: OrderedLinkOptions = {},
+): OrderedLink[] {
+  const found: OrderedLink[] = [];
+  const seen = new Set<string>();
+  const text = options.raw
+    ? stripFileLinks(wikitext)
+    : // Templates first: a navigation box expands to links that are not the
+      // page's own ordering, and file links are pictures rather than chapters.
+      stripFileLinks(stripBlockMarkup(wikitext));
+
+  let section = '';
+  for (const line of text.split('\n')) {
+    const heading = /^(={2,6})\s*(.+?)\s*\1\s*$/.exec(line);
+    if (heading) {
+      section = stripMarkup(heading[2]!);
+      continue;
+    }
+    // A heading written as a template. Its parameter is sometimes a bare string
+    // and sometimes a link — `{{h2|[[Portal/Gameplay|Gameplay]]}}` — in which
+    // case the label names the section *and* the target is one of its pages, so
+    // the line still falls through to the link scan below.
+    if (options.raw && TEMPLATE_HEADING.test(line)) {
+      const inner = line.trim().replace(/^\{\{/, '').replace(/\}\}\s*$/, '');
+      const label = stripMarkup(splitParams(inner)[1] ?? '');
+      if (label) section = label;
+    }
+
+    for (const match of line.matchAll(WIKILINK)) {
+      const target = match[1]!;
+      // `[[:Category:X]]` and interwiki links are filing, not chapters.
+      if (target.startsWith(':') || /^[a-z-]{2,12}:/.test(target)) continue;
+      const title = normalizePageTitle(resolveRelative(target, options.pageTitle ?? ''));
+      if (!title || seen.has(title)) continue;
+      seen.add(title);
+      found.push({ title, section });
+    }
+  }
+  return found;
+}
+
 export function collectExpandable(wikitext: string): string[] {
   const found = new Set<string>();
   for (const match of stripBlockMarkup(wikitext).matchAll(/\{\{([^{}\n]*)\}\}/g)) {
     const inner = match[1]!.trim();
     if (!inner || inner.length > 300) continue;
     if (SPOILER_TEMPLATES.test(inner)) continue;
+    if (NAV_TEMPLATE.test(inner)) continue;
+    if (LAYOUT_TEMPLATE.test(splitParams(inner)[0]!.trim())) continue;
     if (PAGE_CONTEXT.test(inner)) continue;
     if (templateText(inner) !== null) continue;
     found.add(inner);
@@ -614,6 +806,8 @@ interface Block {
   spoiler: boolean;
   /** Pictures referenced alongside this block. Empty unless asked for. */
   images: ImageRef[];
+  /** Set when this block *is* a table, in which case `content` is empty. */
+  table?: TableRef;
 }
 
 /** Resolves a page title to the id of its subject, when it is in this download. */
@@ -639,6 +833,10 @@ function toBlocks(
   resolve?: Resolver,
   withImages = false,
   expanded: Record<string, string> = {},
+  /** The page this section is on, for resolving `[[../Sibling]]` links. */
+  pageTitle = '',
+  /** The page's tables, indexed by the markers `extractTables` left behind. */
+  tables: TableRef[] = [],
 ): Block[] {
   const { text, images: fromGalleries } = extractGalleries(body);
   const blocks: Block[] = [];
@@ -648,7 +846,7 @@ function toBlocks(
   let pending: ImageRef[] = [];
 
   const push = (raw: string, spoiler: boolean): void => {
-    const content = toInline(raw, resolve);
+    const content = toInline(raw, resolve, pageTitle);
     const images = pending;
     pending = [];
     // A picture with no prose is still a block: on Blue Prince a section is
@@ -669,9 +867,24 @@ function toBlocks(
       flush();
       continue;
     }
-    if (/^\s*(\{\||\|\}|\|[-+}]|!)/.test(line)) continue; // tables: skip
+    if (/^\s*(\{\||\|\}|\|[-+}]|!)/.test(line)) continue; // stray table syntax
 
-    const { text: withoutTemplates, spoiler } = extractTemplates(line, expanded);
+    const { text: extracted, spoiler } = extractTemplates(line, expanded);
+
+    // Where a table stood. Checked *after* template extraction, and anywhere in
+    // the line rather than only as the whole of it: a table inside a multi-line
+    // `{{spoiler|…}}` has its marker flattened into the middle of the template's
+    // single line, and looking only at whole lines dropped the table and printed
+    // the marker as the hint's text. The spoiler flag rides along, so a table
+    // that was an answer stays behind the same tap.
+    const { text: withoutTemplates, markers } = takeMarkers(extracted);
+    if (markers.length > 0) {
+      flush();
+      for (const index of markers) {
+        const table = tables[index];
+        if (table) blocks.push({ content: [], spoiler, images: [], table });
+      }
+    }
     const listItem = /^[*#:;]+\s*(.*)$/.exec(withoutTemplates);
     if (listItem) {
       flush();
@@ -780,13 +993,27 @@ function pageToSubject(
   const stack: { level: number; node: SubjectNode }[] = [{ level: 1, node: root }];
   let counter = 0;
 
-  for (const section of splitSections(stripBlockMarkup(page.wikitext), expanded)) {
+  // Tables come out before anything strips them: `stripBlockMarkup` erases
+  // `{| … |}` wholesale, which on StrategyWiki deletes whole pages. Each is
+  // replaced by a marker line, so it still lands in the section it was in.
+  const { text: withTableMarkers, tables } = extractTables(page.wikitext);
+
+  for (const section of splitSections(stripBlockMarkup(withTableMarkers), expanded)) {
     // Filing, not content: references, galleries, track listings. Dropped
     // rather than ranked — they are only a few per cent of a wiki's prose, but
     // they are rows, and rows are what you scroll past.
     if (rank && isNeverHint(section.title)) continue;
 
-    const blocks = toBlocks(section.body, resolve, images, expanded);
+    const all = toBlocks(section.body, resolve, images, expanded, page.title, tables);
+    // An ordinary table is a sibling of the section's prose rather than part of
+    // it: the prose is joined into one node, so there is no position inside it
+    // to hold a table, and a table-only page has no prose at all.
+    //
+    // A *spoiler* table cannot be, though. It is an answer, so it goes through
+    // the normal block path and ends up behind the same tap as the rest of the
+    // spoiler — which is the whole reason `HintNode` carries tables.
+    const blocks = all.filter((block) => !block.table || block.spoiler);
+    const tableBlocks = all.filter((block) => block.table && !block.spoiler);
 
     let target = root;
     if (section.title) {
@@ -803,7 +1030,7 @@ function pageToSubject(
       target = node;
     }
 
-    if (blocks.length === 0) continue;
+    if (blocks.length === 0 && tableBlocks.length === 0) continue;
 
     const spoilers = blocks.filter((b) => b.spoiler);
     const plain = blocks.filter((b) => !b.spoiler);
@@ -838,12 +1065,19 @@ function pageToSubject(
         }
         target.children.push(group);
       } else {
+        const id = `${target.id}.t${target.children.length}`;
         const text: TextNode = {
-          id: `${target.id}.t${target.children.length}`,
+          id,
           type: 'text',
           label: section.title || root.label,
           content: joinBlocks(plain),
         };
+        // Every block's pictures, not one block's: the prose was just joined
+        // into a single node, so there is nowhere else for them to hang.
+        const pictures = plain.flatMap((block, index) =>
+          imagesFor(block, `${id}:b${index}`, wikiBase) ?? [],
+        );
+        if (pictures.length > 0) text.images = pictures;
         target.children.push(text);
       }
     }
@@ -860,14 +1094,66 @@ function pageToSubject(
           const hint: HintNode = { id, type: 'hint', content: block.content };
           const pictures = imagesFor(block, id, wikiBase);
           if (pictures) hint.images = pictures;
+          if (block.table) {
+            const node = toTableNode(
+              block.table,
+              `${id}:b0`,
+              section.title || root.label,
+              resolve,
+              page.title,
+            );
+            if (node) hint.tables = [node];
+          }
           return hint;
         }),
       };
       target.children.push(group);
     }
+
+    for (const block of tableBlocks) {
+      const node = toTableNode(
+        block.table!,
+        `${target.id}.b${target.children.length}`,
+        section.title || root.label,
+        resolve,
+        page.title,
+      );
+      if (node) target.children.push(node);
+    }
   }
 
   return collapseSectionWrappers(root);
+}
+
+/**
+ * A parsed table, or nothing if it turned out to hold no cells.
+ *
+ * The empty case is real: `extractTables` records a table for every `{|` it
+ * sees so that its marker keeps pointing at the right entry, and some of those
+ * are pure layout — a one-cell wrapper around a column of prose.
+ */
+function toTableNode(
+  table: TableRef,
+  id: string,
+  fallbackLabel: string,
+  resolve?: Resolver,
+  pageTitle = '',
+): TableNode | null {
+  const cells = (row: string[]): Inline[][] => row.map((cell) => toInline(cell, resolve, pageTitle));
+  const headers = cells(table.headers);
+  const rows = table.rows.map(cells);
+  const empty =
+    headers.every((cell) => cell.length === 0) &&
+    rows.every((row) => row.every((cell) => cell.length === 0));
+  if (empty) return null;
+
+  return {
+    id,
+    type: 'table',
+    label: table.caption ? stripMarkup(table.caption) : fallbackLabel,
+    headers,
+    rows,
+  };
 }
 
 /**
@@ -911,11 +1197,24 @@ function pruneDeadLinks(roots: Node[]): void {
         : item,
     );
 
+  // Table cells hold links too, and a cell's link is exactly as dead as a
+  // paragraph's: a page whose sections were all dropped still has an entry in
+  // `pageIds`, so the target id it hands out points at a node that is not in
+  // the tree, and tapping it silently falls back to the document root.
+  const fixTable = (node: TableNode): void => {
+    node.headers = node.headers.map(fix);
+    node.rows = node.rows.map((row) => row.map(fix));
+  };
+
   const walkNode = (node: Node): void => {
     if (node.type === 'subject') node.children.forEach(walkNode);
     else if (node.type === 'text') node.content = fix(node.content);
+    else if (node.type === 'table') fixTable(node);
     else if (node.type === 'hints') {
-      for (const hint of node.hints) hint.content = fix(hint.content);
+      for (const hint of node.hints) {
+        hint.content = fix(hint.content);
+        for (const table of hint.tables ?? []) fixTable(table);
+      }
     }
   };
   roots.forEach(walkNode);
@@ -992,6 +1291,59 @@ function guidanceIndex(children: Node[], rankOf: Map<string, number>): SubjectNo
   };
 }
 
+/**
+ * Wrap the page subjects in the groups the source named.
+ *
+ * Order comes entirely from the groups: they are the wiki's own reading order,
+ * and the order pages were *fetched* in means nothing next to that. Anything a
+ * group did not claim keeps its fetch order and follows, so a page can never be
+ * lost by being left out of an index.
+ *
+ * A group of one is left unwrapped only when the page and the group share a
+ * name — otherwise the wrapper is what carries the section, and collapsing it
+ * would silently lose "Appendices".
+ */
+function groupChildren(
+  children: Node[],
+  subjects: Map<string, SubjectNode>,
+  groups: { title: string; pages: string[] }[],
+): Node[] {
+  const out: Node[] = [];
+  const claimed = new Set<Node>();
+  let counter = 0;
+
+  for (const group of groups) {
+    const members: Node[] = [];
+    for (const title of group.pages) {
+      const subject = subjects.get(normalizePageTitle(title));
+      if (!subject || claimed.has(subject)) continue;
+      claimed.add(subject);
+      members.push(subject);
+    }
+    if (members.length === 0) continue;
+
+    // An unnamed group is the index's lead — links before any heading. Those
+    // pages belong at the top level, not under a heading with no name.
+    if (!group.title) {
+      out.push(...members);
+      continue;
+    }
+    if (members.length === 1 && members[0]!.label === group.title) {
+      out.push(members[0]!);
+      continue;
+    }
+    out.push({
+      id: `p:g${counter++}`,
+      type: 'subject',
+      label: group.title,
+      children: members,
+    });
+  }
+
+  out.push(...children.filter((child) => !claimed.has(child)));
+  return out;
+}
+
 export function parseWikiWalkthrough(
   pages: WikiPageInput[],
   options: WikiWalkthroughOptions,
@@ -1021,6 +1373,9 @@ export function parseWikiWalkthrough(
   const images = options.images ?? false;
   const expanded = options.expanded ?? {};
 
+  /** Page subjects by normalised title, so the groups can pick them up. */
+  const subjects = new Map<string, SubjectNode>();
+
   kept.forEach((page, index) => {
     const subject = pageToSubject(
       page,
@@ -1033,8 +1388,10 @@ export function parseWikiWalkthrough(
       options.baseUrl,
       expanded,
     );
-    if (subject.children.length > 0) children.push(subject);
-    else if (rank) {
+    if (subject.children.length > 0) {
+      children.push(subject);
+      subjects.set(normalizePageTitle(page.title), subject);
+    } else if (rank) {
       // Everything on it was a gallery, a table, or a references list. Worth
       // saying: "why is that page not here" is a fair question, and silence
       // makes it look like the download failed.
@@ -1049,6 +1406,8 @@ export function parseWikiWalkthrough(
 
   if (children.length === 0) warnings.push('No readable content found on these pages.');
 
+  const grouped = options.groups ? groupChildren(children, subjects, options.groups) : children;
+
   const first = pages[0];
   const pageUrl =
     options.documentUrl ??
@@ -1056,15 +1415,15 @@ export function parseWikiWalkthrough(
   const revision = first?.revision ?? null;
 
   if (rank) {
-    orderByGuidance(children, rankOf);
-    const index = guidanceIndex(children, rankOf);
-    if (index) children.unshift(index);
+    orderByGuidance(grouped, rankOf);
+    const index = guidanceIndex(grouped, rankOf);
+    if (index) grouped.unshift(index);
   }
 
   const root: SubjectNode =
-    children.length === 1 && children[0]!.type === 'subject'
-      ? (children[0] as SubjectNode)
-      : { id: 'p:root', type: 'subject', label: options.gameTitle, children };
+    grouped.length === 1 && grouped[0]!.type === 'subject'
+      ? (grouped[0] as SubjectNode)
+      : { id: 'p:root', type: 'subject', label: options.gameTitle, children: grouped };
   root.label = options.gameTitle;
 
   const document: HintDocument = {

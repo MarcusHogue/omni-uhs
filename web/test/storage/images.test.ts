@@ -12,11 +12,15 @@ import { beforeEach, describe, expect, it } from 'vitest';
 
 import {
   deleteDocument,
+  deleteImages,
+  findOrphanImages,
+  getDb,
   getImage,
   imageKey,
   listImages,
   putDocument,
   resetDb,
+  sizeOfImages,
   type StoredDocument,
   type StoredImage,
 } from '../../src/storage/db.js';
@@ -130,6 +134,42 @@ describe('image storage', () => {
       document: { id, game: { title: id }, source: {}, fetchedAt: 'now', root: {} },
     }) as unknown as StoredDocument;
 
+  /** A document whose tree really points at the picture, as a download's would. */
+  const withImage = (id: string, file: string): StoredDocument => {
+    const stored = document(id);
+    stored.document.root = {
+      id: 'p:0',
+      type: 'subject',
+      label: id,
+      children: [
+        {
+          id: 'p:0.p0',
+          type: 'hints',
+          label: 'Q',
+          hints: [
+            {
+              id: 'p:0.p0:h0',
+              type: 'hint',
+              content: [],
+              images: [
+                {
+                  id: 'p:0.p0:h0:i0',
+                  type: 'image',
+                  label: file,
+                  data: new Uint8Array(0),
+                  mime: 'image/webp',
+                  blobKey: imageKey(id, file),
+                  source: { file },
+                },
+              ],
+            },
+          ],
+        },
+      ],
+    } as never;
+    return stored;
+  };
+
   const picture = (documentId: string, file: string): StoredImage => ({
     key: imageKey(documentId, file),
     documentId,
@@ -174,6 +214,37 @@ describe('image storage', () => {
     await putDocument(document('blue'));
 
     expect(await listImages('blue')).toHaveLength(1);
+  });
+
+  it('finds nothing to reclaim when every picture is referenced', async () => {
+    await putDocument(withImage('blue', 'Door.png'), undefined, [picture('blue', 'Door.png')]);
+    expect(await findOrphanImages()).toEqual([]);
+  });
+
+  it('finds the rows an older build left behind on re-download', async () => {
+    // Before the fix, `putDocument` upserted the new pictures and left the old
+    // set in place, so re-downloading a game stranded its previous images. The
+    // fix stops new ones; these are the ones already on disk. Written straight
+    // into the store to reproduce that state.
+    await putDocument(withImage('blue', 'New.png'), undefined, [picture('blue', 'New.png')]);
+    const db = await getDb();
+    await db.put('images', picture('blue', 'Stale-one.png'));
+    await db.put('images', picture('blue', 'Stale-two.png'));
+
+    const orphans = await findOrphanImages();
+    expect(orphans.sort()).toEqual(['blue|Stale-one.png', 'blue|Stale-two.png']);
+    expect(await sizeOfImages(orphans)).toBe(6);
+
+    await deleteImages(orphans);
+    expect(await findOrphanImages()).toEqual([]);
+    // And the referenced one is untouched.
+    expect(await getImage('blue|New.png')).toBeTruthy();
+  });
+
+  it('does not mistake another document\'s pictures for orphans', async () => {
+    await putDocument(withImage('blue', 'A.png'), undefined, [picture('blue', 'A.png')]);
+    await putDocument(withImage('well', 'B.png'), undefined, [picture('well', 'B.png')]);
+    expect(await findOrphanImages()).toEqual([]);
   });
 
   it('takes every picture with the document when it is deleted', async () => {

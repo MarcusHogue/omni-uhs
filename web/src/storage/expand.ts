@@ -14,7 +14,7 @@
  * per template — and the proxy caches them like any other wiki read.
  */
 
-import { api } from '../api/client';
+import type { WikiTransport } from '../api/client';
 
 /**
  * Separates the calls inside one batched request.
@@ -88,7 +88,7 @@ export interface ExpandResult {
  * is a much better outcome than failing a download over a nicety.
  */
 export async function expandTemplates(
-  host: string,
+  wiki: WikiTransport,
   calls: string[],
   signal?: AbortSignal,
 ): Promise<ExpandResult> {
@@ -101,8 +101,7 @@ export async function expandTemplates(
     try {
       const answers: string[][] = [];
       for (const title of PROBE_TITLES) {
-        const response = await api.wiki<ExpandResponse>(
-          host,
+        const response = await wiki.query<ExpandResponse>(
           { action: 'expandtemplates', prop: 'wikitext', title, text },
           signal,
         );
@@ -132,7 +131,7 @@ export async function expandTemplates(
       });
     } catch (error) {
       if ((error as Error).name === 'AbortError') throw error;
-      warnings.push(`could not expand templates on ${host}: ${(error as Error).message}`);
+      warnings.push(`could not expand templates on ${wiki.host}: ${(error as Error).message}`);
     }
   }
 

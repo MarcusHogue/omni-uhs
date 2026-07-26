@@ -9,7 +9,7 @@ import type { FastifyInstance } from 'fastify';
 
 import { getCache } from '../cache/index.js';
 import { listIfArchive, refreshIfArchiveCatalog } from '../catalog/ifarchive.js';
-import { STRATEGYWIKI, listWikiPages } from '../catalog/mediawiki.js';
+import { STRATEGYWIKI, collapseToGames, listWikiPages } from '../catalog/mediawiki.js';
 import { normalizeTitle } from '../catalog/normalize.js';
 import { allowlistedHosts, describeWiki, gameTitleOf } from '../catalog/wikis.js';
 import {
@@ -83,7 +83,7 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
         try {
           return reply.send({
             source,
-            entries: await listWikiPages(cache, STRATEGYWIKI, prefix),
+            entries: collapseToGames(await listWikiPages(cache, STRATEGYWIKI, prefix)),
             warnings: [],
           });
         } catch (error) {

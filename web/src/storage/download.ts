@@ -8,13 +8,14 @@
 
 import { unzipSync } from 'fflate';
 
-import type { CatalogEntry } from '../api/client';
-import { api } from '../api/client';
+import type { CatalogEntry, WikiTransport } from '../api/client';
+import { api, strategyWikiTransport, wikiTransport } from '../api/client';
 import type { HintDocument, ImageNode, ParseResult } from '../parser/ast';
 import { walk } from '../parser/ast';
 import { parseInvisiclues } from '../parser/invisiclues';
 import { parseUhs } from '../parser/uhs';
 import { collectExpandable, parseWikiWalkthrough } from '../parser/wikitext';
+import { orderWalkthrough, parseTableOfContents } from '../parser/wikitext/strategywiki';
 import { putDocument, type StoredDocument, type StoredImage } from './db';
 import { expandTemplates } from './expand';
 import { fetchImages } from './images';
@@ -215,74 +216,147 @@ interface WikiAllPagesResponse {
   query?: { allpages?: { title?: string }[] };
 }
 
+/**
+ * StrategyWiki: one game, shaped and ordered the way the wiki shapes it.
+ *
+ * The other wikis are reference works and the download sorts them
+ * alphabetically, which loses nothing. A walkthrough is the opposite case —
+ * order *is* the content — and this used to sort it alphabetically too, so
+ * Chrono Trigger opened on "Beyond the Ruins" and closed on "The Millennial
+ * Fair": the penultimate chapter first and the opening one last.
+ *
+ * The order comes from the game's Table of Contents, which this used to throw
+ * away as noise. It is a hand-curated map of the whole guide — twenty-eight
+ * chapters in play order, then Appendices, Gameplay, Enemies, Statistics — and
+ * those section names become the document's own shape. Failing that, the
+ * `{{Footer Nav}}` chain the chapters carry; failing that, alphabetical with a
+ * note saying so.
+ */
 async function downloadStrategyWiki(
   entry: CatalogEntry,
   options: DownloadOptions,
 ): Promise<DownloadResult> {
-  // A game is a tree of sub-pages: fetch the lot, in page order.
+  // A game is a tree of sub-pages, and any of them identifies the game.
   const gameTitle = entry.ref.split('/')[0]!;
-  const index = await api.strategyWiki<WikiAllPagesResponse>(
-    {
-      action: 'query',
-      list: 'allpages',
-      apprefix: `${gameTitle}/`,
-      aplimit: '100',
-      apnamespace: '0',
-    },
-    options.signal,
+
+  // Not caught: a missing Table of Contents comes back as an empty list from
+  // `fetchPages`, so anything that throws here is a real network failure and
+  // swallowing it would turn an aborted download into a silently worse one.
+  const signalOnly: DownloadOptions = options.signal ? { signal: options.signal } : {};
+  const [toc, index] = await Promise.all([
+    fetchPages(strategyWikiTransport, [`${gameTitle}/Table of Contents`], signalOnly),
+    api.strategyWiki<WikiAllPagesResponse>(
+      {
+        action: 'query',
+        list: 'allpages',
+        apprefix: `${gameTitle}/`,
+        aplimit: '200',
+        apnamespace: '0',
+      },
+      options.signal,
+    ),
+  ]);
+
+  // The index still runs, even with a Table of Contents in hand. It is the only
+  // check on the ToC being complete, and a page missing from both would be lost
+  // with nothing to say it ever existed.
+  const listed = (index.query?.allpages ?? []).map((page) => page.title ?? '').filter(Boolean);
+  const sections = toc[0] ? parseTableOfContents(toc[0].wikitext, gameTitle) : [];
+
+  // Fetched by title rather than by prefix: Portal's Table of Contents lists
+  // fourteen `Portal: Still Alive/…` pages that `apprefix=Portal/` cannot see,
+  // and a prefix-only download dropped the whole expansion without a word.
+  const wanted = new Set<string>([gameTitle, ...sections.flatMap((s) => s.pages), ...listed]);
+  const titles = [...wanted].filter(
+    // The index page itself would nest a copy of the contents inside the game.
+    (title) => title && !/\/(Table[ _]of[ _]Contents)$/i.test(title),
   );
 
-  const titles = [gameTitle, ...(index.query?.allpages ?? []).map((p) => p.title ?? '')]
-    .filter(Boolean)
-    // Skip the noise: table-of-contents pages duplicate the tree we build.
-    .filter((title) => !/\/(Table[ _]of[ _]Contents)$/i.test(title));
+  const fetched = await fetchPages(strategyWikiTransport, titles, options);
+  if (fetched.length === 0) throw new Error(`No StrategyWiki pages found for "${gameTitle}".`);
 
-  const fetched = await fetchPages(titles, (title) =>
-    api.strategyWiki<WikiRevisionsResponse>(
+  // Reading order, before anything else looks at the pages: the parser numbers
+  // sections in the order it receives them. With a Table of Contents the groups
+  // carry the order, so the page list only has to be complete.
+  const { ordered, notes } =
+    sections.length > 0 ? { ordered: fetched, notes: [] } : orderWalkthrough(fetched, gameTitle);
+
+  const policy = await imageSettings();
+  const calls = new Set<string>();
+  for (const page of ordered) for (const call of collectExpandable(page.wikitext)) calls.add(call);
+  const templates = await expandTemplates(strategyWikiTransport, [...calls], options.signal);
+
+  // StrategyWiki is written as a walkthrough with its answers already behind
+  // spoiler templates, so its pages are kept as they read — and never ranked,
+  // which would reorder the very thing that was just put back in order.
+  const result = parseWikiWalkthrough(ordered, {
+    kind: 'strategywiki',
+    gameTitle,
+    baseUrl: 'https://strategywiki.org/wiki/',
+    documentUrl: `https://strategywiki.org/wiki/${encodeURIComponent(gameTitle.replace(/ /g, '_'))}`,
+    license: 'CC-BY-SA-4.0',
+    personalUseOnly: false,
+    reveal: 'as-written',
+    images: policy.enabled,
+    expanded: templates.expanded,
+    ...(sections.length > 0 ? { groups: sections } : {}),
+  });
+  result.warnings.push(...notes, ...templates.warnings);
+
+  const nodes: ImageNode[] = [];
+  if (policy.enabled) {
+    for (const node of walk(result.document.root)) if (node.type === 'image') nodes.push(node);
+  }
+  const pictures = await fetchImages(strategyWikiTransport, result.document.id, nodes, policy, {
+    ...(options.signal ? { signal: options.signal } : {}),
+    onProgress: (done, total) => options.onProgress?.('images', done, total),
+  });
+  result.warnings.push(...pictures.warnings);
+  // Same rule as the other wikis: an embedded picture carries no licence of its
+  // own, so a document holding one stays out of a shareable export.
+  if (pictures.images.length > 0) result.document.source.personalUseOnly = true;
+
+  return storeWiki(result, ordered, pictures.images);
+}
+
+/**
+ * Fetch each page's wikitext, batched.
+ *
+ * MediaWiki accepts many titles in one `titles=` parameter, so a forty-page game
+ * costs two requests rather than forty round trips to somebody else's server.
+ * The response comes back in the API's order, not the request's, which no caller
+ * relies on: both sort afterwards.
+ */
+async function fetchPages(
+  transport: WikiTransport,
+  titles: string[],
+  options: DownloadOptions,
+): Promise<WikiPageContent[]> {
+  const fetched: WikiPageContent[] = [];
+  for (let i = 0; i < titles.length; i += TITLE_BATCH) {
+    options.onProgress?.('pages', i, titles.length);
+    const batch = titles.slice(i, i + TITLE_BATCH);
+    const response = await transport.query<WikiRevisionsResponse>(
       {
         action: 'query',
         prop: 'revisions',
-        titles: title,
+        titles: batch.join('|'),
         rvslots: 'main',
         rvprop: 'content|ids',
       },
       options.signal,
-    ),
-  );
-
-  if (fetched.length === 0) throw new Error(`No StrategyWiki pages found for "${gameTitle}".`);
-
-  // StrategyWiki is written as a walkthrough with its answers already behind
-  // spoiler templates, so its pages are kept as they read.
-  const result = parseWikiWalkthrough(fetched, {
-    kind: 'strategywiki',
-    gameTitle,
-    baseUrl: 'https://strategywiki.org/wiki/',
-    license: 'CC-BY-SA-4.0',
-    personalUseOnly: false,
-    reveal: 'as-written',
-  });
-
-  return storeWiki(result, fetched);
-}
-
-/** Fetch each page's wikitext, serially, as MediaWiki asks (spec §6.3). */
-async function fetchPages(
-  titles: string[],
-  fetchOne: (title: string) => Promise<WikiRevisionsResponse>,
-): Promise<WikiPageContent[]> {
-  const fetched: WikiPageContent[] = [];
-  for (const title of titles) {
-    const response = await fetchOne(title);
-    const page = response.query?.pages?.[0];
-    if (!page || page.missing) continue;
-    const revision = page.revisions?.[0];
-    fetched.push({
-      title: page.title ?? title,
-      wikitext: revision?.slots?.main?.content ?? '',
-      revision: revision?.revid !== undefined ? String(revision.revid) : null,
-    });
+    );
+    for (const page of response.query?.pages ?? []) {
+      if (!page.title || page.missing) continue;
+      const revision = page.revisions?.[0];
+      fetched.push({
+        title: page.title,
+        wikitext: revision?.slots?.main?.content ?? '',
+        revision: revision?.revid !== undefined ? String(revision.revid) : null,
+      });
+    }
   }
+  options.onProgress?.('pages', titles.length, titles.length);
   return fetched;
 }
 
@@ -353,37 +427,9 @@ async function downloadWiki(
   }
 
   const policy = await imageSettings();
+  const transport = wikiTransport(host);
 
-  // Batched, because one request per page would be forty round trips to
-  // somebody else's server for a single download.
-  const fetched: WikiPageContent[] = [];
-  for (let i = 0; i < candidates.titles.length; i += TITLE_BATCH) {
-    options.onProgress?.('pages', i, candidates.titles.length);
-    const batch = candidates.titles.slice(i, i + TITLE_BATCH);
-    const response = await api.wiki<WikiRevisionsResponse>(
-      host,
-      {
-        action: 'query',
-        prop: 'revisions',
-        titles: batch.join('|'),
-        rvslots: 'main',
-        rvprop: 'content|ids',
-      },
-      options.signal,
-    );
-    for (const page of response.query?.pages ?? []) {
-      if (!page.title || page.missing) continue;
-      const revision = page.revisions?.[0];
-      fetched.push({
-        title: page.title,
-        wikitext: revision?.slots?.main?.content ?? '',
-        revision: revision?.revid !== undefined ? String(revision.revid) : null,
-      });
-    }
-  }
-
-  options.onProgress?.('pages', candidates.titles.length, candidates.titles.length);
-
+  const fetched = await fetchPages(transport, candidates.titles, options);
   if (fetched.length === 0) throw new Error(`No pages could be read from ${host}.`);
 
   // Alphabetical, so the same game downloaded twice reads the same way; the
@@ -395,7 +441,7 @@ async function downloadWiki(
   // the game's name — and no reading of the page can recover them.
   const calls = new Set<string>();
   for (const page of fetched) for (const call of collectExpandable(page.wikitext)) calls.add(call);
-  const templates = await expandTemplates(host, [...calls], options.signal);
+  const templates = await expandTemplates(transport, [...calls], options.signal);
 
   const result = parseWikiWalkthrough(fetched, {
     kind: entry.sourceKind,
@@ -421,7 +467,7 @@ async function downloadWiki(
     for (const node of walk(result.document.root)) if (node.type === 'image') nodes.push(node);
   }
 
-  const pictures = await fetchImages(host, result.document.id, nodes, policy, {
+  const pictures = await fetchImages(transport, result.document.id, nodes, policy, {
     ...(options.signal ? { signal: options.signal } : {}),
     onProgress: (done, total) => options.onProgress?.('images', done, total),
   });

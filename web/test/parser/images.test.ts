@@ -194,6 +194,30 @@ File:Conceptart 01.jpg
     expect(hint?.images?.[0]?.source?.file).toBe('Room 46 solution.png');
   });
 
+  it('keeps the picture on a page read as written', () => {
+    // StrategyWiki renders as-written, so its prose is a `text` node rather
+    // than a hint — and `text` had nowhere to put a picture, so every one on
+    // every StrategyWiki page was parsed and then dropped on the floor.
+    const { document } = parseWikiWalkthrough(
+      [{ title: 'Chrono Trigger/The Millennial Fair', wikitext: PAGE, revision: '1' }],
+      {
+        kind: 'strategywiki',
+        gameTitle: 'Chrono Trigger',
+        baseUrl: 'https://strategywiki.org/wiki/',
+        license: 'CC-BY-SA-4.0',
+        personalUseOnly: false,
+        reveal: 'as-written',
+        images: true,
+      },
+    );
+
+    const texts = [...walk(document.root)].filter((n) => n.type === 'text');
+    expect(texts.flatMap((n) => (n.type === 'text' ? (n.images ?? []) : []))).toHaveLength(1);
+    // And reachable by walk(), which is what the orphan sweep counts as "in
+    // use" — without it every StrategyWiki picture would look reclaimable.
+    expect([...walk(document.root)].some((n) => n.type === 'image')).toBe(true);
+  });
+
   it('is reachable by walk(), so search and export see it', () => {
     const { document } = parse(PAGE, true);
     expect([...walk(document.root)].some((n) => n.type === 'image')).toBe(true);

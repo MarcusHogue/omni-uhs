@@ -4,6 +4,7 @@ import type { HintGroupNode, ParseResult, SubjectNode, TextNode } from '../../sr
 import { inlineText, walk } from '../../src/parser/ast.js';
 import {
   collectExpandable,
+  orderedLinks,
   parseWikiWalkthrough,
   splitSections,
   stripMarkup,
@@ -471,6 +472,129 @@ describe('markup that is not markup', () => {
     expect(stripMarkup('<code>FIND_RABBIT</code>')).toBe('FIND_RABBIT');
     // `<math>` goes; the arithmetic inside it is the content.
     expect(stripMarkup('<math>0 + 5 + 13 = 18</math>')).toBe('0 + 5 + 13 = 18');
+  });
+
+  it('does not read a layout template\'s parameter as a word', () => {
+    // A lone unnamed parameter is normally the word the template stands in for
+    // — `{{roomtype|Puzzle}}` — and nothing about the *value* separates that
+    // from `{{floatingtoc|left}}`, where "left" is a position. Chrono Trigger
+    // puts one at the top of every chapter, so "left" opened every chapter.
+    expect(stripMarkup('{{floatingtoc|left}}After naming the protagonist')).toBe(
+      'After naming the protagonist',
+    );
+    expect(stripMarkup('{{col|4|begin}}Gameplay')).toBe('Gameplay');
+    expect(stripMarkup('{{control selector|SNES,DS}}Prose')).toBe('Prose');
+    // And a template that really is standing in for a word still is.
+    expect(stripMarkup('a long {{roomtype|Puzzle}};')).toBe('a long Puzzle;');
+  });
+
+  it('keeps the pointer when a link label was nothing but a template', () => {
+    // StrategyWiki writes `[[../Tabs|{{ctcontrol|Power Tab|Strength Capsule}}]]`
+    // — two unnamed parameters, so the template is dropped as unreadable, which
+    // emptied the label and left `[[../Tabs|]]`. Neither link pattern matches
+    // that, so a section heading showed the residue `../Tabs|`, and in prose the
+    // whole reference vanished. The target's own name stands in for it.
+    expect(stripMarkup('There is one [[../Tabs|{{ctcontrol|Power Tab|Capsule}}]] to grab')).toBe(
+      'There is one Tabs to grab',
+    );
+    expect(stripMarkup('the [[Chrono Trigger/Characters#Lavos]] fight')).toBe(
+      'the Characters fight',
+    );
+  });
+});
+
+describe('relative links', () => {
+  // StrategyWiki's house style, and it was silently costing every cross-
+  // reference in a game. `Chrono Trigger/The Millennial Fair` points at its
+  // sibling as `[[../Characters#Crono|Crono]]`, which normalised to
+  // `../Characters` — matching no downloaded page — so the link quietly became
+  // plain text. There are dozens per chapter.
+  const parse = (): ParseResult =>
+    parseWikiWalkthrough(
+      [
+        {
+          title: 'Chrono Trigger/The Millennial Fair',
+          revision: '1',
+          wikitext: 'Talk to [[../Characters#Crono|Crono]] and see [[/Shops|the shops]].',
+        },
+        { title: 'Chrono Trigger/Characters', revision: '2', wikitext: 'Crono is the hero.' },
+        {
+          title: 'Chrono Trigger/The Millennial Fair/Shops',
+          revision: '3',
+          wikitext: 'Melchior sells swords.',
+        },
+      ],
+      { ...OPTIONS, gameTitle: 'Chrono Trigger' },
+    );
+
+  it('resolves ../sibling and /child against the page they are on', () => {
+    const { document } = parse();
+    const links = [...walk(document.root)]
+      .flatMap((n) => (n.type === 'text' ? n.content : []))
+      .filter((i) => i.kind === 'link');
+    expect(links.map((l) => l.label)).toEqual(['Crono', 'the shops']);
+    // And they point somewhere real, which is the whole difference.
+    const ids = new Set([...walk(document.root)].map((n) => n.id));
+    for (const link of links) expect(ids.has(link.targetId)).toBe(true);
+  });
+
+  it('leaves a link alone when there is no page to resolve it against', () => {
+    // `stripMarkup` has no page context, so `../X` cannot mean anything; it
+    // must not be guessed at, only rendered by its leaf name.
+    expect(stripMarkup('see [[../Characters|the cast]]')).toBe('see the cast');
+  });
+});
+
+describe('orderedLinks', () => {
+  // Shaped after StrategyWiki, where a game's chapters are sibling subpages and
+  // the Walkthrough page is the hand-ordered index that names them. The order is
+  // the whole value: a walkthrough sorted alphabetically is not a walkthrough,
+  // and `prop=links` returns alphabetical, so it has to come from the wikitext.
+  const INDEX = `{{Header Nav|game=Chrono Trigger}}
+The walkthrough is split by era.
+
+==Walkthrough==
+* [[Chrono Trigger/The Millennial Fair|The Millennial Fair]]
+* [[Chrono Trigger/Beyond the Ruins]]
+* [[Chrono Trigger/Break the Seal!]]
+
+==Appendices==
+* [[Chrono Trigger/Characters]]
+* [[:Category:Chrono Trigger]]
+* [[fr:Chrono Trigger]]
+`;
+
+  it('keeps the page order, not alphabetical order', () => {
+    expect(orderedLinks(INDEX).map((link) => link.title)).toEqual([
+      'Chrono Trigger/The Millennial Fair',
+      'Chrono Trigger/Beyond the Ruins',
+      'Chrono Trigger/Break the Seal!',
+      'Chrono Trigger/Characters',
+    ]);
+  });
+
+  it('says which section each link sat under', () => {
+    // How the appendices are found without hard-coding their titles.
+    const bySection = orderedLinks(INDEX).map((link) => link.section);
+    expect(bySection).toEqual(['Walkthrough', 'Walkthrough', 'Walkthrough', 'Appendices']);
+  });
+
+  it('leaves out filing and interwiki links', () => {
+    const titles = orderedLinks(INDEX).map((link) => link.title);
+    expect(titles.join(' ')).not.toContain('Category:');
+    expect(titles).not.toContain('Fr:Chrono Trigger');
+  });
+
+  it('drops duplicates, keeping the first appearance', () => {
+    const links = orderedLinks('* [[A]]\n* [[B]]\n* [[A]]\n');
+    expect(links.map((link) => link.title)).toEqual(['A', 'B']);
+  });
+
+  it('ignores pictures and navigation templates', () => {
+    // A nav box expands to links that are not this page's ordering, and a file
+    // link is a picture rather than a chapter.
+    const links = orderedLinks('[[File:Map.png|thumb|see [[Cave]]]]\n{{Footer Nav|game=X}}\n* [[Real]]\n');
+    expect(links.map((link) => link.title)).toEqual(['Real']);
   });
 });
 

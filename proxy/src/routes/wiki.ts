@@ -33,6 +33,9 @@ import {
 } from '../catalog/wikis.js';
 import { assertAllowed } from '../upstream/allowlist.js';
 
+/** StrategyWiki serves its uploads from its own host. Both spellings of it. */
+const STRATEGYWIKI_IMAGE_HOSTS = ['strategywiki.org', 'www.strategywiki.org'];
+
 /** Only read actions are proxied; nothing may write to a wiki. */
 const ALLOWED_ACTIONS = new Set(['query', 'parse', 'opensearch', 'expandtemplates']);
 
@@ -66,6 +69,55 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
       .header('content-type', 'application/json; charset=utf-8')
       .header('x-cache', entry.fromCache ? 'HIT' : 'MISS')
       .send(await cache.readBytes(entry));
+  });
+
+  /**
+   * The bytes of one StrategyWiki picture.
+   *
+   * A route of its own rather than a widening of `/api/wiki/:host/image`, which
+   * gates on the runtime wiki allowlist — a SQLite table that only ever holds
+   * Fandom and wiki.gg hosts, because those are the only ones `allowWiki`
+   * accepts. StrategyWiki is a boot-time upstream instead, so its check is the
+   * fixed pair below and nothing a request can influence.
+   *
+   * StrategyWiki serves uploads from its own host, so the allowlist here is the
+   * same one `/api/strategywiki` uses. `assertAllowed` re-runs on every redirect
+   * hop inside the fetcher, so a 302 towards something internal is rejected too.
+   */
+  app.get('/api/strategywiki/image', async (request, reply) => {
+    const { url } = request.query as { url?: string };
+    if (!url) return reply.code(400).send({ error: 'url is required' });
+
+    const parsed = assertAllowed(url, STRATEGYWIKI_IMAGE_HOSTS);
+    // Extension anywhere in the path, not at the end: a MediaWiki thumbnail is
+    // `/w/images/thumb/a/ab/Map.png/640px-Map.png`, and the check has to pass
+    // for the directory component as well as the file.
+    if (!/\.(png|jpe?g|gif|webp|svg)(\/|$|\?)/i.test(parsed.pathname)) {
+      return reply.code(400).send({ error: 'only image URLs are proxied here' });
+    }
+
+    const cache = getCache();
+    const entry = await cache.fetch({
+      url: parsed.toString(),
+      ttl: config.ttl.file,
+      allowlist: STRATEGYWIKI_IMAGE_HOSTS,
+      accept: 'image/*',
+    });
+    if (!entry.contentType.startsWith('image/')) {
+      return reply.code(502).send({ error: `upstream sent ${entry.contentType}, not an image` });
+    }
+    if (entry.size > config.imageMaxBytes) {
+      return reply
+        .code(413)
+        .send({ error: `image is ${entry.size} bytes, over the ${config.imageMaxBytes} cap` });
+    }
+
+    return reply
+      .header('content-type', entry.contentType)
+      .header('content-length', String(entry.size))
+      .header('cache-control', 'private, max-age=31536000, immutable')
+      .header('x-cache', entry.fromCache ? 'HIT' : 'MISS')
+      .send(cache.stream(entry));
   });
 
   /** License of a wiki, so the client can show attribution before ingesting. */
