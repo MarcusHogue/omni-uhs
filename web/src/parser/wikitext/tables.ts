@@ -98,12 +98,30 @@ const MARKER_CLOSE = '\u0000';
 export const tableMarker = (index: number): string =>
   `${MARKER_OPEN}${index}${MARKER_CLOSE}`;
 
-/** The table a marker line stands for, or -1 if this is not one. */
-export function markedTable(line: string): number {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith(MARKER_OPEN) || !trimmed.endsWith(MARKER_CLOSE)) return -1;
-  const index = Number(trimmed.slice(MARKER_OPEN.length, -MARKER_CLOSE.length));
-  return Number.isInteger(index) && index >= 0 ? index : -1;
+/*
+ * The control characters are the point — they are what makes a marker
+ * impossible for a wiki to write by accident — so the rule is suppressed rather
+ * than worked around.
+ */
+// eslint-disable-next-line no-control-regex
+const MARKER = /\u0000table:(\d+)\u0000/g;
+
+/**
+ * Pull every table marker out of a line, and say which tables they were.
+ *
+ * Not "is this line a marker": a marker does not always get a line to itself.
+ * `stripBlockMarkup` flattens a multi-line `{{spoiler|…}}` onto one line, so a
+ * table written inside one ends up with its marker in the middle of the
+ * template — and matching only whole lines dropped the table and left the
+ * marker to be printed as the hint's text.
+ */
+export function takeMarkers(line: string): { text: string; markers: number[] } {
+  const markers: number[] = [];
+  const text = line.replace(MARKER, (_, index: string) => {
+    markers.push(Number(index));
+    return '';
+  });
+  return { text, markers };
 }
 
 /**
@@ -123,6 +141,21 @@ export function extractTables(wikitext: string): { text: string; tables: TableRe
   let headers: string[] = [];
   let rows: string[][] = [];
   let row: string[] | null = null;
+  /**
+   * Whether `!` lines still belong to the header row.
+   *
+   * The header is the run of `!` lines before the first `|-`, and it is
+   * routinely written one cell per line:
+   *
+   *     ! Name
+   *     ! Description
+   *
+   * Treating only the first of those as a header put "Description" in a data
+   * row of its own, which shifts every column after it — a corrupted table
+   * rather than a missing one. After the first `|-` a leading `!` is a row
+   * header instead, which reads as an ordinary first cell.
+   */
+  let inHeader = true;
 
   const endRow = (): void => {
     if (row && row.length > 0) rows.push(row);
@@ -148,6 +181,7 @@ export function extractTables(wikitext: string): { text: string; tables: TableRe
         headers = [];
         rows = [];
         row = null;
+        inHeader = true;
         // Claim the index now: a nested table must not take the outer one's
         // place in the list, and the outer one's marker is already written.
         kept.push(tableMarker(tables.length));
@@ -174,14 +208,15 @@ export function extractTables(wikitext: string): { text: string; tables: TableRe
     if (trimmed.startsWith('|+')) {
       caption = stripCellAttributes(trimmed.slice(2)).trim();
     } else if (trimmed.startsWith('|-')) {
+      inHeader = false;
       endRow();
     } else if (trimmed.startsWith('!')) {
-      // A header line outside a row is the table's header; inside one it is a
-      // row header, which reads as an ordinary first cell.
       const cells = splitCells(trimmed.slice(1), '!!');
-      if (row === null && headers.length === 0 && rows.length === 0) headers.push(...cells);
+      if (inHeader) headers.push(...cells);
       else (row ??= []).push(...cells);
     } else if (trimmed.startsWith('|')) {
+      // A table with no header at all opens straight onto data.
+      inHeader = false;
       (row ??= []).push(...splitCells(trimmed.slice(1), '||'));
     } else if (trimmed !== '' && row !== null && row.length > 0) {
       // A cell whose content wraps onto the next line.

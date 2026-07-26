@@ -65,14 +65,18 @@ export interface TocSection {
 export function parseTableOfContents(wikitext: string, game: string): TocSection[] {
   const sections: TocSection[] = [];
   const byTitle = new Map<string, TocSection>();
-  const prefix = `${normalizePageTitle(game)}`;
+  const prefix = normalizePageTitle(game);
+  const companions = companionGuides(wikitext);
+
+  const belongs = (title: string): boolean =>
+    title === prefix ||
+    title.startsWith(`${prefix}/`) ||
+    companions.some((name) => title === name || title.startsWith(`${name}/`));
 
   for (const link of orderedLinks(wikitext, { raw: true, pageTitle: `${game}/` })) {
     // A guide's own pages only. A ToC links out to the wiki's front matter and
     // to other games, and following those would download half the wiki.
-    if (link.title !== prefix && !link.title.startsWith(`${prefix}/`) && !isCompanion(link.title, prefix)) {
-      continue;
-    }
+    if (!belongs(link.title)) continue;
     // The ToC lists itself; including it would nest the index inside the game.
     if (/\/Table of Contents$/i.test(link.title)) continue;
 
@@ -89,15 +93,26 @@ export function parseTableOfContents(wikitext: string, game: string): TocSection
 }
 
 /**
- * An expansion filed under the base game.
+ * The expansions this Table of Contents says belong to the guide.
  *
- * Portal's Table of Contents lists `Portal: Still Alive/Challenge Map 1` and
- * thirteen more beside it, under a `{{subtoc}}`. Those are part of the guide by
- * the wiki's own account, and `list=allpages&apprefix=Portal/` cannot see a one
- * of them — so a prefix-only download silently dropped a whole expansion.
+ * Portal's lists `Portal: Still Alive/Challenge Map 1` and thirteen more, under
+ * a `{{subtoc|Portal: Still Alive}}`. Those are part of the guide by the wiki's
+ * own account, and `list=allpages&apprefix=Portal/` cannot see one of them — so
+ * a prefix-only download silently dropped a whole expansion.
+ *
+ * Read from the `{{subtoc}}` rather than guessed at from the title. Guessing
+ * was the first attempt and it was wrong: any rule loose enough to accept
+ * `Portal: Still Alive` from `Portal` also accepts `Portal 2` — a different
+ * game with its own guide — and pulls it into this download. The wiki names its
+ * companions explicitly, so there is nothing to infer.
  */
-function isCompanion(title: string, prefix: string): boolean {
-  return title.startsWith(`${prefix}:`) || title.startsWith(`${prefix} `);
+function companionGuides(wikitext: string): string[] {
+  const names: string[] = [];
+  for (const match of wikitext.matchAll(/\{\{\s*subtoc\s*\|([^{}|]+)\}\}/gi)) {
+    const name = normalizePageTitle(match[1]!);
+    if (name) names.push(name);
+  }
+  return names;
 }
 
 /** `{{Footer Nav|game=Chrono Trigger|prevpage=…|nextpage=…}}`. */

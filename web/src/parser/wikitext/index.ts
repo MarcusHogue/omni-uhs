@@ -29,7 +29,7 @@ import { guidanceRank, isNeverHint, looksLikeGuidance, scoreSection } from './gu
 import type { ImageRef } from './images';
 import { extractGalleries, findFileLinks, splitParams, stripFileLinks } from './images';
 import type { TableRef } from './tables';
-import { extractTables, markedTable } from './tables';
+import { extractTables, takeMarkers } from './tables';
 
 export interface WikiPageInput {
   title: string;
@@ -867,18 +867,24 @@ function toBlocks(
       flush();
       continue;
     }
-    // Where a table stood. It becomes a block of its own so that it lands in
-    // the section it belongs to rather than at the foot of the page.
-    const marked = markedTable(line);
-    if (marked >= 0) {
-      const table = tables[marked];
-      flush();
-      if (table) blocks.push({ content: [], spoiler: false, images: [], table });
-      continue;
-    }
     if (/^\s*(\{\||\|\}|\|[-+}]|!)/.test(line)) continue; // stray table syntax
 
-    const { text: withoutTemplates, spoiler } = extractTemplates(line, expanded);
+    const { text: extracted, spoiler } = extractTemplates(line, expanded);
+
+    // Where a table stood. Checked *after* template extraction, and anywhere in
+    // the line rather than only as the whole of it: a table inside a multi-line
+    // `{{spoiler|…}}` has its marker flattened into the middle of the template's
+    // single line, and looking only at whole lines dropped the table and printed
+    // the marker as the hint's text. The spoiler flag rides along, so a table
+    // that was an answer stays behind the same tap.
+    const { text: withoutTemplates, markers } = takeMarkers(extracted);
+    if (markers.length > 0) {
+      flush();
+      for (const index of markers) {
+        const table = tables[index];
+        if (table) blocks.push({ content: [], spoiler, images: [], table });
+      }
+    }
     const listItem = /^[*#:;]+\s*(.*)$/.exec(withoutTemplates);
     if (listItem) {
       flush();
@@ -999,11 +1005,15 @@ function pageToSubject(
     if (rank && isNeverHint(section.title)) continue;
 
     const all = toBlocks(section.body, resolve, images, expanded, page.title, tables);
-    // Tables are siblings of the section's prose rather than part of it: the
-    // prose is joined into one node, so there is no position inside it to hold
-    // them, and a table-only page has no prose at all.
-    const blocks = all.filter((block) => !block.table);
-    const tableBlocks = all.filter((block) => block.table);
+    // An ordinary table is a sibling of the section's prose rather than part of
+    // it: the prose is joined into one node, so there is no position inside it
+    // to hold a table, and a table-only page has no prose at all.
+    //
+    // A *spoiler* table cannot be, though. It is an answer, so it goes through
+    // the normal block path and ends up behind the same tap as the rest of the
+    // spoiler — which is the whole reason `HintNode` carries tables.
+    const blocks = all.filter((block) => !block.table || block.spoiler);
+    const tableBlocks = all.filter((block) => block.table && !block.spoiler);
 
     let target = root;
     if (section.title) {
@@ -1084,6 +1094,16 @@ function pageToSubject(
           const hint: HintNode = { id, type: 'hint', content: block.content };
           const pictures = imagesFor(block, id, wikiBase);
           if (pictures) hint.images = pictures;
+          if (block.table) {
+            const node = toTableNode(
+              block.table,
+              `${id}:b0`,
+              section.title || root.label,
+              resolve,
+              page.title,
+            );
+            if (node) hint.tables = [node];
+          }
           return hint;
         }),
       };
@@ -1177,11 +1197,24 @@ function pruneDeadLinks(roots: Node[]): void {
         : item,
     );
 
+  // Table cells hold links too, and a cell's link is exactly as dead as a
+  // paragraph's: a page whose sections were all dropped still has an entry in
+  // `pageIds`, so the target id it hands out points at a node that is not in
+  // the tree, and tapping it silently falls back to the document root.
+  const fixTable = (node: TableNode): void => {
+    node.headers = node.headers.map(fix);
+    node.rows = node.rows.map((row) => row.map(fix));
+  };
+
   const walkNode = (node: Node): void => {
     if (node.type === 'subject') node.children.forEach(walkNode);
     else if (node.type === 'text') node.content = fix(node.content);
+    else if (node.type === 'table') fixTable(node);
     else if (node.type === 'hints') {
-      for (const hint of node.hints) hint.content = fix(hint.content);
+      for (const hint of node.hints) {
+        hint.content = fix(hint.content);
+        for (const table of hint.tables ?? []) fixTable(table);
+      }
     }
   };
   roots.forEach(walkNode);

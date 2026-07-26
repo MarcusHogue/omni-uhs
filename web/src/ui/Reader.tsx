@@ -406,6 +406,11 @@ function HintsView({
                   {...(wiki ? { wiki } : {})}
                 />
               ))}
+              {/* Inside the revealed <li> for the same reason: a table behind a
+                  spoiler template is the answer, not an illustration. */}
+              {hint.tables?.map((table, n) => (
+                <TableView key={table.id ?? n} node={table} onNavigate={onNavigate} />
+              ))}
             </div>
           </li>
         ))}

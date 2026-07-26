@@ -103,6 +103,14 @@ export interface HintNode extends NodeBase {
    * must not be rendered until the hint above it has been revealed by a tap.
    */
   images?: ImageNode[];
+  /**
+   * Tables that belong to this step.
+   *
+   * Same reasoning as the pictures, and the same necessity: a table inside a
+   * `{{spoiler}}` is an answer, so it cannot be a sibling of the hint group the
+   * way an ordinary table is — it has to be behind the same tap.
+   */
+  tables?: TableNode[];
 }
 
 export interface TextNode extends NodeBase {
@@ -239,6 +247,7 @@ export function* walk(node: Node): Generator<Node> {
     for (const hint of node.hints) {
       for (const nested of hint.nested ?? []) yield* walk(nested);
       for (const image of hint.images ?? []) yield* walk(image);
+      for (const table of hint.tables ?? []) yield* walk(table);
     }
   } else if (node.type === 'text') {
     for (const image of node.images ?? []) yield* walk(image);

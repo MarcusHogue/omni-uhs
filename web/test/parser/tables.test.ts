@@ -13,7 +13,7 @@ import type { TableNode } from '../../src/parser/ast.js';
 import { walk } from '../../src/parser/ast.js';
 import { deserializeDocument, serializeDocument } from '../../src/parser/serialize.js';
 import { parseWikiWalkthrough } from '../../src/parser/wikitext/index.js';
-import { extractTables, markedTable } from '../../src/parser/wikitext/tables.js';
+import { extractTables, takeMarkers } from '../../src/parser/wikitext/tables.js';
 
 const INNS = `{{Header Nav|game=Chrono Trigger}}
 {|{{prettytable|sortable=1}}
@@ -63,11 +63,38 @@ describe('extractTables', () => {
     // the only thing that says which section a table belonged to.
     const { text } = extractTables(INNS);
     expect(text.split('\n')).toHaveLength(INNS.split('\n').length);
-    const markers = text.split('\n').filter((line) => markedTable(line) >= 0);
+    const markers = text.split('\n').filter((line) => takeMarkers(line).markers.length > 0);
     expect(markers).toHaveLength(1);
     // And nothing of the table itself survives into the prose.
     expect(text).not.toContain('Bangor Dome');
     expect(text).not.toContain('prettytable');
+  });
+
+  it('keeps a header written one cell per line', () => {
+    // The common multiline form. Taking only the first `!` line as the header
+    // put "Description" in a data row of its own and shifted every column after
+    // it — a corrupted table rather than a missing one, which is worse.
+    const perLine = `{|
+! Name
+! Description
+|-
+|Sword||Sharp
+|}`;
+    const [table] = extractTables(perLine).tables;
+    expect(table!.headers).toEqual(['Name', 'Description']);
+    expect(table!.rows).toEqual([['Sword', 'Sharp']]);
+  });
+
+  it('treats a ! after the first row break as a row header, not a heading', () => {
+    const rowHeaders = `{|
+!Name!!Value
+|-
+!Strength
+|10
+|}`;
+    const [table] = extractTables(rowHeaders).tables;
+    expect(table!.headers).toEqual(['Name', 'Value']);
+    expect(table!.rows).toEqual([['Strength', '10']]);
   });
 
   it('accepts one cell per line as well as several to a line', () => {
@@ -235,6 +262,62 @@ After.`;
     const table = [...walk(back.root)].find((n): n is TableNode => n.type === 'table')!;
     expect(table.rows).toHaveLength(5);
     expect(plain(table.rows[4]![0]!)).toBe('Truce Inn');
+  });
+
+  it('keeps a table inside a spoiler behind the spoiler', () => {
+    // `stripBlockMarkup` flattens a multi-line `{{spoiler|…}}` onto one line,
+    // so the table's marker ends up mid-template. Matching only whole lines
+    // dropped the table *and* printed the raw marker as the hint's text.
+    const page = `Intro.
+
+{{spoiler|
+{|
+!A!!B
+|-
+|1||2
+|}
+}}`;
+    const { document } = parseWikiWalkthrough(
+      [{ title: 'Chrono Trigger/Secrets', wikitext: page, revision: '1' }],
+      OPTIONS,
+    );
+
+    const hints = [...walk(document.root)].flatMap((n) => (n.type === 'hints' ? n.hints : []));
+    const hint = hints.find((h) => h.tables);
+    expect(hint?.tables?.[0]?.rows).toEqual([[[{ kind: 'run', text: '1' }], [{ kind: 'run', text: '2' }]]]);
+    // Behind the reveal, not beside it: a table in a spoiler is the answer.
+    expect([...walk(document.root)].filter((n) => n.type === 'table')).toHaveLength(1);
+    const prose = [...walk(document.root)]
+      .flatMap((n) => (n.type === 'text' ? n.content : []))
+      .map((i) => (i.kind === 'run' ? i.text : i.label))
+      .join('');
+    expect(prose).toBe('Intro.');
+    // And the marker never reaches anything a reader can see.
+    for (const h of hints) {
+      expect(h.content.map((i) => (i.kind === 'run' ? i.text : i.label)).join('')).not.toContain(
+        'table:',
+      );
+    }
+  });
+
+  it('turns a dead link in a cell back into text', () => {
+    // A page whose sections were all dropped still has an id in `pageIds`, so a
+    // cell could link to a node that is not in the tree — and the reader
+    // silently falls back to the document root when it cannot find one.
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Chrono Trigger/Markets',
+          wikitext: '{|\n|-\n|[[../Empty|Iron Blade]]||350 G\n|}',
+          revision: '1',
+        },
+        // Nothing on it survives parsing, so it contributes no subject.
+        { title: 'Chrono Trigger/Empty', wikitext: '{|\n|-\n|\n|}', revision: '2' },
+      ],
+      OPTIONS,
+    );
+    const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
+    expect(table.rows[0]![0]![0]).toEqual({ kind: 'run', text: 'Iron Blade' });
   });
 
   it('leaves a layout-only table out rather than emitting an empty one', () => {

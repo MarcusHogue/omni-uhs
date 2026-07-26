@@ -233,14 +233,31 @@ describe('parseTableOfContents', () => {
     expect(pages.some((page) => page.includes('.png'))).toBe(false);
   });
 
-  it('follows a companion guide filed under the base game', () => {
+  it('follows a companion guide the index names in a {{subtoc}}', () => {
     // Portal's contents lists fourteen `Portal: Still Alive/…` pages, and
     // `list=allpages&apprefix=Portal/` cannot see one of them.
     const sections = parseTableOfContents(
-      '{{h2|Challenge Maps}}\n# [[Portal: Still Alive/Challenge Map 1|Map 1]]',
+      '{{subtoc|Portal: Still Alive}}\n{{h2|Challenge Maps}}\n# [[Portal: Still Alive/Challenge Map 1|Map 1]]',
       'Portal',
     );
     expect(sections[0]?.pages).toEqual(['Portal: Still Alive/Challenge Map 1']);
+  });
+
+  it('does not swallow a different game that happens to share the prefix', () => {
+    // The first attempt guessed at companions from the title, and any rule
+    // loose enough to accept "Portal: Still Alive" from "Portal" also accepts
+    // "Portal 2" — a separate game with its own guide, pulled into this
+    // download. The wiki names its companions, so there is nothing to infer.
+    const sections = parseTableOfContents(
+      `{{subtoc|Portal: Still Alive}}
+{{h2|See also}}
+* [[Portal 2/Chapter 1|Portal 2]]
+* [[Portal: Still Alive/Achievements|Achievements]]`,
+      'Portal',
+    );
+    expect(sections.flatMap((section) => section.pages)).toEqual([
+      'Portal: Still Alive/Achievements',
+    ]);
   });
 
   it('says nothing about a page that is not an index', () => {
