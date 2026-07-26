@@ -196,7 +196,7 @@ hammered, so everything goes through `proxy/`:
 | **IF Archive** | `indexes/Master-Index.xml` (~15 MB) is fetched daily and the hint-bearing subtrees indexed into SQLite. Includes InvisiClues transcriptions, which are already question → progressive answers. |
 | **IFDB** | Metadata and search. Cloudflare-fronted: it answers 403 without a real `User-Agent`, so the honest one is mandatory rather than merely polite. |
 | **StrategyWiki** | MediaWiki API, CC-BY-SA 4.0. Page URL and revision id are recorded and displayed. |
-| **Fandom / wiki.gg** | Searchable, browsable and downloadable — but only for the wikis you name in `WIKI_ALLOWLIST`. Each is asked for its own script path and licence on first contact; a `-NC` licence forces `personalUseOnly`. Pages are re-shaped so answers reveal one at a time (see below), and reference pages are skipped. |
+| **Fandom / wiki.gg** | Searchable, browsable and downloadable, one wiki at a time, added from the app or seeded with `WIKI_ALLOWLIST`. Each is asked for its own script path and licence on first contact; a `-NC` licence forces `personalUseOnly`. A whole wiki arrives as one game: the proxy picks its most likely guidance pages, the parser re-shapes them so answers reveal one at a time, and pictures come down with them (see below). |
 
 GameFAQs, Neoseeker, Fextralife and Steam Guides are deliberately **not**
 implemented — all-rights-reserved or ToS-restricted.
@@ -233,11 +233,42 @@ written would give away the puzzle you opened it to get a nudge on. Wiki pages
 are therefore re-shaped: each section heading becomes a question and its
 paragraphs become hints revealed one at a time, in the order the page tells it —
 the same progressive contract as a UHS file, minus the hand-authored ordering.
-Nothing reorders them: a wiki section is often a sequence ("first do this, then
-that"), and sorting by length would shuffle the steps to gain a spoiler
-gradation the source never had. A page that is mostly infobox and stat
-tables carries no guidance at all and is skipped with a warning rather than
-stored as a wall of parameters.
+Nothing reorders the hints *within* a section: a wiki section is often a
+sequence ("first do this, then that"), and sorting by length would shuffle the
+steps to gain a spoiler gradation the source never had.
+
+**Which pages, and which of them are guidance.** A wiki is hundreds of pages
+and most of them are not hints. The proxy picks about sixty by weighing four
+signals — links from the wiki's own hand-curated main page, categories whose
+*names* carry guidance vocabulary (`Bosses (Hollow Knight)`, `Secret rabbits`),
+two searches, and a whole-wiki enumeration as the floor — and reports where they
+came from. An earlier version matched a fixed list of category names, which
+found fifty pages on Blue Prince and *zero* on Hollow Knight, Outer Wilds and
+Return of the Obra Dinn.
+
+Sections are then scored on how instructional their language is, measured
+against 318 real sections across five wikis: a "How To" or "Strategy" section
+runs 7–14 second-person and imperative matches per 100 words against a median of
+0.9. The score **orders and never removes.** It is blind to a whole genre —
+Return of the Obra Dinn scores zero everywhere, because its answers are facts
+("this man is Alexander Booth") rather than instructions, and those are the most
+spoiler-bearing pages on the wiki. So a document leads with a **Likely
+guidance** index of its twenty strongest sections, marks those rows, and leaves
+everything else exactly where it is and unlabelled. Only headings that are never
+a hint on any wiki — References, Gallery, Trivia, Appearances, Soundtrack, In
+other languages — are dropped outright.
+
+**Some answers are pictures.** Blue Prince's puzzles are scans of in-game
+documents; the text around them says little more than "see the diagram". Those
+are downloaded with the game at 640px and stored offline — Blue Prince's 277
+pictures come to about 16 MB that way, where their originals average over a
+megabyte each — and tapping one fetches the original from the wiki when you are
+online. A picture hangs off the *hint*, not
+the section, so a solution scan is not on screen until the hint above it has
+been revealed by a tap. Neither platform states a licence for its images, so a
+game carrying them is `personalUseOnly`: it stays out of a shareable export, and
+the export says the image count as the reason. Turn the whole thing off in
+Settings if you would rather have the text alone.
 
 **Their licences vary per wiki.** Each wiki is asked for its own on first
 contact and the answer is cached; `-NC` (common on ex-Gamepedia game wikis)
