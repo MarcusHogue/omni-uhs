@@ -297,6 +297,81 @@ Enter the code from the study.
     expect(keypad?.type).toBe('hints');
   });
 
+  it('drops category filing instead of reading it as a hint', () => {
+    // `[[Category:Creatures]]` renders as nothing in a page body — MediaWiki
+    // puts it in a footer — so passing the text through produced a hint that
+    // read "Category:Creatures".
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Manticore',
+          wikitext:
+            'The manticore guards the east door until you show it the seal.\n\n' +
+            '[[Category:Creatures]]\n[[Category:Bosses]]\n',
+          revision: '1',
+        },
+      ],
+      { ...OPTIONS, kind: 'fandom', reveal: 'progressive' },
+    );
+    const said = [...walk(document.root)]
+      .filter((n): n is HintGroupNode => n.type === 'hints')
+      .flatMap((n) => n.hints.map((h) => inlineText(h.content)));
+    expect(said.join(' ')).toContain('guards the east door');
+    expect(said.join(' ')).not.toContain('Category');
+    // And no hint exists that was *only* a category.
+    expect(said.every((text) => text.trim().length > 0)).toBe(true);
+  });
+
+  it('links a page that is in the download, and flattens one that is not', () => {
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Room 46',
+          wikitext:
+            'The door is opened from [[The Antechamber]], not from here.\n\n' +
+            'It has nothing to do with the [[Boiler Room]], despite the rumours.\n',
+          revision: '1',
+        },
+        {
+          title: 'The Antechamber',
+          wikitext: 'Enter the code from the study on the keypad by the door.\n',
+          revision: '2',
+        },
+      ],
+      { ...OPTIONS, kind: 'fandom', reveal: 'progressive' },
+    );
+
+    const runs = [...walk(document.root)]
+      .filter((n): n is HintGroupNode => n.type === 'hints')
+      .flatMap((n) => n.hints.flatMap((h) => h.content));
+
+    const link = runs.find((item) => item.kind === 'link');
+    expect(link).toMatchObject({ kind: 'link', label: 'The Antechamber' });
+
+    // The target is a real node, or the reader has a button that goes nowhere.
+    const ids = new Set([...walk(document.root)].map((n) => n.id));
+    expect(ids.has((link as { targetId: string }).targetId)).toBe(true);
+
+    // Boiler Room was not downloaded, so it stays as text rather than becoming
+    // a dead end.
+    expect(runs.some((i) => i.kind === 'link' && i.label === 'Boiler Room')).toBe(false);
+    expect(runs.map((i) => (i.kind === 'run' ? i.text : '')).join('')).toContain('Boiler Room');
+  });
+
+  it('keeps the spaces around a link', () => {
+    const { document } = parseWikiWalkthrough(
+      [
+        { title: 'A', wikitext: 'Go to [[B]] and wait there.\n', revision: '1' },
+        { title: 'B', wikitext: 'This is the place you were told to wait.\n', revision: '2' },
+      ],
+      { ...OPTIONS, kind: 'fandom', reveal: 'progressive' },
+    );
+    const group = [...walk(document.root)].find(
+      (n): n is HintGroupNode => n.type === 'hints',
+    )!;
+    expect(inlineText(group.hints[0]!.content)).toBe('Go to B and wait there.');
+  });
+
   it('records Fandom attribution from the wiki it actually came from', () => {
     const { document } = parseWikiWalkthrough(
       [{ title: 'Room 46', wikitext: REFERENCE_PAGE, revision: '9912' }],

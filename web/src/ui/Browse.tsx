@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
+import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import {
   api,
@@ -7,13 +7,13 @@ import {
   strategyWikiSearchUrl,
   type CatalogEntry,
   type SourceInfo,
-  type WikiSite,
 } from '../api/client';
 import { getSetting } from '../storage/db';
 import { downloadEntry } from '../storage/download';
 import { ErrorNote, SourceBadge, Spinner, Warnings } from './bits';
 import { useLatest, useLibrary, useOfflineRefs } from './hooks';
 import { refUrl } from './refs';
+import { LicenceLine } from './WikiFinder';
 
 const LETTERS = '#abcdefghijklmnopqrstuvwxyz'.split('');
 
@@ -144,24 +144,20 @@ function SourceListing({ source }: { source: string }): JSX.Element {
   // StrategyWiki has no browsable index worth paging through; it needs a prefix.
   const needsPrefix = source === 'strategywiki';
 
-  // A wiki platform names hundreds of independent sites, so browsing one means
-  // picking a wiki first. The choice lives in the URL rather than in state, so a
-  // listing stays linkable and the back button works.
+  // A wiki platform lists games, one per wiki: every page on a game's wiki is
+  // about that game, so the wiki is the title and its pages are sections of it.
+  // Nothing here pages through a wiki's contents any more.
   const platform = isWikiPlatform(source) ? source : null;
   const sources = useSources();
   const hosts = platform ? hostsOf(sources, platform) : [];
-  const [params, setParams] = useSearchParams();
-  const host = platform ? (params.get('host') ?? hosts[0] ?? null) : null;
-  // Nothing can be listed until we know which wiki; `sources === null` is
-  // still-loading, which is not the same as "none allowlisted".
-  const waitingForHost = platform !== null && host === null;
+  const noWikis = platform !== null && sources !== null && hosts.length === 0;
 
   useEffect(() => {
     if (needsPrefix && prefix.trim() === '') {
       setEntries([]);
       return;
     }
-    if (waitingForHost) {
+    if (noWikis) {
       setEntries([]);
       return;
     }
@@ -170,7 +166,7 @@ function SourceListing({ source }: { source: string }): JSX.Element {
     setChallengeLink(null);
     runLatest(async (signal) => {
       try {
-        const response = await api.list(source, prefix, signal, host ?? undefined);
+        const response = await api.list(source, prefix, signal);
         setEntries(response.entries);
         setWarnings(response.warnings);
 
@@ -202,25 +198,20 @@ function SourceListing({ source }: { source: string }): JSX.Element {
         setLoading(false);
       }
     });
-  }, [source, prefix, needsPrefix, host, waitingForHost, runLatest]);
+  }, [source, prefix, needsPrefix, noWikis, runLatest]);
 
   return (
     <>
       <p className="crumbs">
         <Link to="/browse">Browse</Link> › <SourceBadge kind={source as never} />
-        {host && <> › <span className="mono">{host}</span></>}
       </p>
 
-      {platform && (
-        <WikiHeader
-          hosts={hosts}
-          host={host}
-          loaded={sources !== null}
-          onPick={(next) => {
-            setPrefix('');
-            setParams({ host: next });
-          }}
-        />
+      {noWikis && (
+        <p className="muted">
+          No wikis have been added for this platform yet.{' '}
+          <Link to="/settings">Add one in Settings</Link> and it appears here straight
+          away.
+        </p>
       )}
 
       {source === 'uhs' && (
@@ -245,7 +236,7 @@ function SourceListing({ source }: { source: string }): JSX.Element {
         </div>
       )}
 
-      {(source === 'ifarchive' || needsPrefix || (platform && host)) && (
+      {(source === 'ifarchive' || needsPrefix || (platform && hosts.length > 3)) && (
         <input
           className="filter"
           type="search"
@@ -254,7 +245,7 @@ function SourceListing({ source }: { source: string }): JSX.Element {
             needsPrefix
               ? 'Game page prefix, e.g. "Chrono Trigger/"'
               : platform
-                ? 'Page title starts with… (leave blank for the first 200)'
+                ? 'Filter by game…'
                 : 'Filter by path…'
           }
           onChange={(event) => setPrefix(event.target.value)}
@@ -286,107 +277,13 @@ function SourceListing({ source }: { source: string }): JSX.Element {
         ))}
       </ul>
 
-      {!loading && !error && entries.length === 0 && !waitingForHost && (
+      {!loading && !error && entries.length === 0 && !noWikis && (
         <p className="muted">
           {needsPrefix && prefix.trim() === ''
             ? 'Type a game name to list its pages.'
             : 'Nothing here.'}
         </p>
       )}
-    </>
-  );
-}
-
-/**
- * Which wiki, and on what terms.
- *
- * The licence is shown *before* anything is downloaded because it decides what
- * can be done with the result afterwards: a `-NC` wiki marks everything it
- * yields personal-use-only, which keeps it out of a shareable export. Finding
- * that out after the fact would be a nasty surprise.
- */
-function WikiHeader({
-  hosts,
-  host,
-  loaded,
-  onPick,
-}: {
-  hosts: string[];
-  host: string | null;
-  loaded: boolean;
-  onPick: (host: string) => void;
-}): JSX.Element {
-  const [site, setSite] = useState<WikiSite | null>(null);
-  const [siteError, setSiteError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setSite(null);
-    setSiteError(null);
-    if (!host) return;
-    let cancelled = false;
-    api
-      .wikiSite(host)
-      .then((result) => {
-        if (!cancelled) setSite(result);
-      })
-      .catch((caught: Error) => {
-        if (!cancelled) setSiteError(caught.message);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [host]);
-
-  if (!host) {
-    return (
-      <p className="muted">
-        {loaded ? (
-          <>
-            No wikis have been added for this platform yet.{' '}
-            <Link to="/settings">Add one in Settings</Link> and it is browsable straight
-            away.
-          </>
-        ) : (
-          'Loading wikis…'
-        )}
-      </p>
-    );
-  }
-
-  return (
-    <>
-      {hosts.length > 1 && (
-        <div className="chips" role="group" aria-label="Choose a wiki">
-          {hosts.map((candidate) => (
-            <button
-              key={candidate}
-              type="button"
-              className={candidate === host ? 'chip chip-on' : 'chip'}
-              aria-pressed={candidate === host}
-              onClick={() => onPick(candidate)}
-            >
-              {candidate.replace(/\.(fandom\.com|wiki\.gg)$/, '')}
-            </button>
-          ))}
-        </div>
-      )}
-      <p className="muted">
-        {site ? (
-          <>
-            {site.sitename} — {site.license}
-            {site.personalUseOnly && (
-              <>
-                {' '}
-                <span className="pill">personal use only</span>
-              </>
-            )}
-          </>
-        ) : siteError ? (
-          `Could not read this wiki's licence: ${siteError}`
-        ) : (
-          'Checking licence…'
-        )}
-      </p>
     </>
   );
 }
@@ -415,6 +312,12 @@ function BrowseRow({
           {ref !== entry.title && <span className="muted mono">{ref}</span>}
           {downloaded && <span className="pill pill-offline">Available offline</span>}
         </span>
+        {entry.meta?.license && (
+          <LicenceLine
+            license={entry.meta.license}
+            personalUseOnly={entry.meta.personalUseOnly ?? false}
+          />
+        )}
         {error && <span className="error">{error}</span>}
       </div>
       <button

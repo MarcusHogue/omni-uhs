@@ -46,6 +46,24 @@ export interface WikiSite {
   gamepedia: boolean;
 }
 
+/**
+ * The game a wiki is about.
+ *
+ * Wikis name themselves after the game with "Wiki" on the end — "Blue Prince
+ * Wiki", "Animal Well Wiki" — and that suffix is about the site, not the game.
+ * Falling back to the hostname keeps something readable for a wiki that has not
+ * set a sitename.
+ */
+export function gameTitleOf(sitename: string, host: string): string {
+  const stripped = sitename
+    .replace(/\s*[-–—|:]?\s*(the\s+)?(official\s+)?wiki\s*$/i, '')
+    .replace(/\s*wiki\s*$/i, '')
+    .trim();
+  if (stripped) return stripped;
+  const slug = host.replace(/\.(fandom\.com|wiki\.gg)$/, '').replace(/[-_]+/g, ' ');
+  return slug.replace(/\b[a-z]/g, (c) => c.toUpperCase());
+}
+
 /** Which source a host belongs to. */
 export function kindForHost(host: string): SourceKind | null {
   const lower = host.toLowerCase();

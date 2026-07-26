@@ -18,13 +18,16 @@ import { getCache } from '../cache/index.js';
 import { IFDB_BASE } from '../catalog/ifdb.js';
 import { STRATEGYWIKI, apiUrl, fetchRightsInfo } from '../catalog/mediawiki.js';
 import { discoverWikis } from '../catalog/discover.js';
+import { gatherPages } from '../catalog/wikipages.js';
 import {
   allowWiki,
   allowedWikiHosts,
   describeWiki,
   forgetWiki,
+  gameTitleOf,
   isPinned,
   isWikiAllowed,
+  siteTarget,
   targetFor,
 } from '../catalog/wikis.js';
 import { assertAllowed } from '../upstream/allowlist.js';
@@ -156,6 +159,29 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
       });
     }
     return reply.send(await describeWiki(getCache(), host.toLowerCase()));
+  });
+
+  /**
+   * The pages of a wiki worth downloading as one game.
+   *
+   * Resolved here rather than in the browser because it is several list calls
+   * that all cache, and because "which pages of this wiki are guidance" is a
+   * question about the wiki, not about the client asking.
+   */
+  app.get('/api/wiki/:host/pages', async (request, reply) => {
+    const { host } = request.params as { host: string };
+    const cache = getCache();
+    if (!isWikiAllowed(cache, host)) {
+      return reply.code(400).send({
+        error: `wiki host not allowed: ${host}`,
+        hint: 'add it in Settings, or to WIKI_ALLOWLIST',
+      });
+    }
+    const lower = host.toLowerCase();
+    const site = await describeWiki(cache, lower);
+    const game = gameTitleOf(site.sitename, lower);
+    const candidates = await gatherPages(cache, siteTarget(site), game);
+    return reply.send({ host: lower, game, ...candidates });
   });
 
   app.get('/api/wiki/:host', async (request, reply) => {

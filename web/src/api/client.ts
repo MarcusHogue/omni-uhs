@@ -14,7 +14,15 @@ export interface CatalogEntry {
   ref: string;
   /** Which wiki, for the multi-wiki sources. Unset elsewhere. */
   host?: string;
-  meta?: { year?: number; platform?: string; complete?: boolean; size?: number; date?: string };
+  meta?: {
+    year?: number;
+    platform?: string;
+    complete?: boolean;
+    size?: number;
+    date?: string;
+    license?: string;
+    personalUseOnly?: boolean;
+  };
 }
 
 export interface CatalogGroup {
@@ -45,6 +53,15 @@ export interface WikiSite {
   pinned?: boolean;
   /** Set when an allowlisted wiki would not answer. */
   error?: string;
+}
+
+/** The pages of a wiki that carry guidance, resolved by the proxy. */
+export interface WikiPageCandidates {
+  host: string;
+  game: string;
+  titles: string[];
+  fromCategories: number;
+  fromSearch: number;
 }
 
 /** A wiki the proxy found and verified, offered for adding. */
@@ -259,6 +276,14 @@ export const api = {
   wiki<T>(host: string, params: Record<string, string>, signal?: AbortSignal): Promise<T> {
     return getJson<T>(
       `/api/wiki/${encodeURIComponent(host)}?${new URLSearchParams(params)}`,
+      signal,
+    );
+  },
+
+  /** Which of a wiki's pages are worth downloading as one game. */
+  wikiPages(host: string, signal?: AbortSignal): Promise<WikiPageCandidates> {
+    return getJson<WikiPageCandidates>(
+      `/api/wiki/${encodeURIComponent(host)}/pages`,
       signal,
     );
   },

@@ -87,11 +87,16 @@ you download anything, because it decides what you can do with the result: a
 everything from it **personal use only**, which keeps it out of a shareable
 export while leaving it in a full backup.
 
-Wiki pages are re-shaped on the way in rather than stored as written — sections
-become questions, paragraphs become hints revealed one at a time. A page that
-turns out to be all infobox and stat tables is refused with a note saying so,
-which is the expected outcome for a weapon or item page. Aim at the puzzle,
-secret and ending pages.
+A wiki downloads as **one title**, not one page at a time: the wiki is the game,
+and its pages become the sections of a single library entry. Which pages come
+down is worked out from the categories game wikis file guidance under — Puzzles,
+Secrets, Endings, Bosses and so on — falling back to the wiki's own search when
+a wiki files nothing. Pages that turn out to be all infobox and stat tables are
+dropped on the way in, which is the expected outcome for a weapon or item page.
+
+Content is re-shaped rather than stored as written: sections become questions
+and paragraphs become hints revealed one at a time. Links between pages that
+came down together stay live, so a hint pointing at another page is a tap.
 
 **`WIKI_ALLOWLIST`** is still there, for seeding a fresh container with wikis
 you always want:

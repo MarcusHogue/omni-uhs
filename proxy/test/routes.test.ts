@@ -331,19 +331,20 @@ describe('/api/catalog/:source/list', () => {
     expect(response.statusCode).toBe(400);
   });
 
-  // `:source` names a platform of hundreds of wikis, so it cannot say which one.
-  it('needs a host to browse a wiki platform', async () => {
+  // A wiki platform lists games -- one row per wiki -- not the pages of one
+  // wiki. With nothing added, that list is empty rather than an error.
+  it('lists wiki games, and has none until a wiki is added', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/catalog/fandom/list' });
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toMatch(/host is required/);
+    expect(response.statusCode).toBe(200);
+    expect(response.json().entries).toEqual([]);
   });
 
-  it('refuses to browse a wiki that is not allowlisted', async () => {
+  it('never lists a wiki that is not allowlisted, whatever is asked for', async () => {
     const response = await app.inject({
       method: 'GET',
-      url: '/api/catalog/wikigg/list?host=anything.wiki.gg',
+      url: '/api/catalog/wikigg/list?prefix=anything',
     });
-    expect(response.statusCode).toBe(400);
-    expect(response.json().hint).toMatch(/WIKI_ALLOWLIST/);
+    expect(response.statusCode).toBe(200);
+    expect(response.json().entries).toEqual([]);
   });
 });

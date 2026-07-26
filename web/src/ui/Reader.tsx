@@ -203,7 +203,7 @@ function NodeView(props: ViewProps): JSX.Element {
     case 'hints':
       return <HintsView {...props} group={node} />;
     case 'text':
-      return <TextView node={node} />;
+      return <TextView node={node} onNavigate={props.onNavigate} />;
     case 'image':
       return <ImageView node={node} onNavigate={props.onNavigate} />;
     case 'link':
@@ -297,7 +297,7 @@ function HintsView({
           <li key={hint.id ?? i} className="hint">
             <span className="hint-number">{i + 1}</span>
             <div className="hint-body">
-              <InlineRuns content={hint.content} />
+              <InlineRuns content={hint.content} onNavigate={onNavigate} />
               {hint.nested && hint.nested.length > 0 && (
                 <ul className="list nested">
                   {hint.nested.map(unwrap).map((nested, n) => (
@@ -343,11 +343,17 @@ function HintsView({
   );
 }
 
-function TextView({ node }: { node: TextNode }): JSX.Element {
+function TextView({
+  node,
+  onNavigate,
+}: {
+  node: TextNode;
+  onNavigate: (id: string) => void;
+}): JSX.Element {
   return (
     <div className="textnode">
       <h2>{node.label}</h2>
-      <InlineRuns content={node.content} />
+      <InlineRuns content={node.content} onNavigate={onNavigate} />
     </div>
   );
 }
@@ -444,7 +450,21 @@ function ImageView({
   );
 }
 
-function InlineRuns({ content }: { content: Inline[] }): JSX.Element {
+/**
+ * A run of text, with in-document links you can actually follow.
+ *
+ * The link kind existed before this and rendered as an inert span, which on a
+ * wiki page is most of the page: "see [[The Antechamber]]" looked like a
+ * cross-reference and did nothing. The parser only emits a link when its target
+ * is a node in this document, so every one of these has somewhere to go.
+ */
+function InlineRuns({
+  content,
+  onNavigate,
+}: {
+  content: Inline[];
+  onNavigate?: (id: string) => void;
+}): JSX.Element {
   return (
     <p className="runs">
       {content.map((item, i) =>
@@ -452,6 +472,15 @@ function InlineRuns({ content }: { content: Inline[] }): JSX.Element {
           <span key={i} className={item.mono ? 'mono' : undefined}>
             {item.text}
           </span>
+        ) : onNavigate ? (
+          <button
+            key={i}
+            type="button"
+            className="linkish inline-link"
+            onClick={() => onNavigate(item.targetId)}
+          >
+            {item.label}
+          </button>
         ) : (
           <span key={i} className="inline-link">
             {item.label}

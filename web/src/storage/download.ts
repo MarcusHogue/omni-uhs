@@ -286,49 +286,90 @@ async function storeWiki(
 }
 
 /**
- * Fandom and wiki.gg.
+ * How many page titles go into one `titles=` parameter.
  *
- * Two things differ from StrategyWiki, and both matter:
+ * MediaWiki accepts 50 for anonymous callers. Twenty keeps each response a
+ * sensible size and still turns a whole game into two or three requests instead
+ * of forty — which is the difference between a download and a crawl.
+ */
+const TITLE_BATCH = 20;
+
+/**
+ * Fandom and wiki.gg: one wiki, one game, one title in the library.
+ *
+ * A game wiki is not a source of pages to collect individually — every page on
+ * `blue-prince.fandom.com` is about Blue Prince. So the whole game arrives as a
+ * single document whose sections are its pages, and the proxy decides which
+ * pages those are.
+ *
+ * Two more things differ from StrategyWiki:
  *
  * - **The licence is read, not assumed.** These are per-wiki, and plenty of the
  *   game wikis are CC-BY-NC-SA, which has to set `personalUseOnly` and keep the
- *   page out of a shareable export.
+ *   game out of a shareable export.
  * - **The reveal is rebuilt.** A reference wiki marks nothing as an answer, so
- *   rendering the page as written would spoil all of it at once. Sections
- *   become questions and paragraphs become hints revealed one at a time.
+ *   rendering a page as written would spoil all of it at once. Sections become
+ *   questions and paragraphs become hints revealed one at a time.
  */
 async function downloadWiki(
   entry: CatalogEntry,
   options: DownloadOptions,
 ): Promise<DownloadResult> {
-  const host = entry.host;
-  if (!host) {
+  const host = entry.host ?? entry.ref;
+  if (!host || !host.includes('.')) {
     throw new Error(`This ${entry.sourceKind} result does not say which wiki it came from.`);
   }
 
   const site = await api.wikiSite(host, options.signal);
-  const pageTitle = entry.ref;
+  const candidates = await api.wikiPages(host, options.signal);
+  const gameTitle = entry.title || candidates.game;
 
-  const fetched = await fetchPages([pageTitle], (title) =>
-    api.wiki<WikiRevisionsResponse>(
+  if (candidates.titles.length === 0) {
+    throw new Error(
+      `No guidance pages found on ${host}. It may file its pages under categories this ` +
+        'does not recognise.',
+    );
+  }
+
+  // Batched, because one request per page would be forty round trips to
+  // somebody else's server for a single download.
+  const fetched: WikiPageContent[] = [];
+  for (let i = 0; i < candidates.titles.length; i += TITLE_BATCH) {
+    const batch = candidates.titles.slice(i, i + TITLE_BATCH);
+    const response = await api.wiki<WikiRevisionsResponse>(
       host,
       {
         action: 'query',
         prop: 'revisions',
-        titles: title,
+        titles: batch.join('|'),
         rvslots: 'main',
         rvprop: 'content|ids',
       },
       options.signal,
-    ),
-  );
+    );
+    for (const page of response.query?.pages ?? []) {
+      if (!page.title || page.missing) continue;
+      const revision = page.revisions?.[0];
+      fetched.push({
+        title: page.title,
+        wikitext: revision?.slots?.main?.content ?? '',
+        revision: revision?.revid !== undefined ? String(revision.revid) : null,
+      });
+    }
+  }
 
-  if (fetched.length === 0) throw new Error(`"${pageTitle}" was not found on ${host}.`);
+  if (fetched.length === 0) throw new Error(`No pages could be read from ${host}.`);
+
+  // Alphabetical, so the same game downloaded twice reads the same way; the
+  // order categories come back in is not stable and means nothing.
+  fetched.sort((a, b) => a.title.localeCompare(b.title));
 
   const result = parseWikiWalkthrough(fetched, {
     kind: entry.sourceKind,
-    gameTitle: pageTitle,
+    gameTitle,
     baseUrl: `https://${host}/wiki/`,
+    // The document is the wiki, not any one of its pages.
+    documentUrl: `https://${host}/wiki/`,
     license: site.license,
     personalUseOnly: site.personalUseOnly,
     reveal: 'progressive',
@@ -337,8 +378,7 @@ async function downloadWiki(
 
   if (result.document.root.children.length === 0) {
     throw new Error(
-      result.warnings[0] ??
-        `"${pageTitle}" has no readable guidance on it — it looks like a reference page.`,
+      `Nothing on ${host} read as guidance — every page fetched looks like reference data.`,
     );
   }
 

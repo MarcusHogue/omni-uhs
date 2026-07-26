@@ -10,14 +10,15 @@ import type { FastifyInstance } from 'fastify';
 import { getCache } from '../cache/index.js';
 import { listIfArchive, refreshIfArchiveCatalog } from '../catalog/ifarchive.js';
 import { STRATEGYWIKI, listWikiPages } from '../catalog/mediawiki.js';
-import { isWikiAllowed, targetFor } from '../catalog/wikis.js';
+import { normalizeTitle } from '../catalog/normalize.js';
+import { allowlistedHosts, describeWiki, gameTitleOf } from '../catalog/wikis.js';
 import {
   DEFAULT_SEARCH_SOURCES,
   SEARCHABLE_SOURCES,
   describeSources,
   searchCatalog,
 } from '../catalog/search.js';
-import type { SourceKind } from '../catalog/types.js';
+import type { CatalogEntry, SourceKind } from '../catalog/types.js';
 import { listUhsCatalog, refreshUhsCatalog } from '../catalog/uhs.js';
 
 const MIN_QUERY = 3;
@@ -99,34 +100,31 @@ export async function catalogRoutes(app: FastifyInstance): Promise<void> {
       }
       case 'fandom':
       case 'wikigg': {
-        // Which wiki has to come from a query parameter: `:source` names the
-        // platform, and a platform is hundreds of independent wikis.
-        const { host } = request.query as { host?: string };
-        if (!host) {
-          return reply
-            .code(400)
-            .send({ error: `host is required for ${source} (e.g. ?host=animalwell.wiki.gg)` });
+        // One row per wiki, because a wiki is a game. Paging through a game
+        // wiki's thousands of pages was never the useful view: the pages are
+        // sections of one title, and the download gathers them.
+        const warnings: string[] = [];
+        const entries: CatalogEntry[] = [];
+        for (const host of allowlistedHosts(cache, source)) {
+          try {
+            const site = await describeWiki(cache, host);
+            const title = gameTitleOf(site.sitename, host);
+            if (prefix && !title.toLowerCase().startsWith(prefix.toLowerCase())) continue;
+            entries.push({
+              sourceKind: source,
+              title,
+              normalizedTitle: normalizeTitle(title),
+              ref: host,
+              host,
+              // Shown before the download, because a -NC wiki marks everything
+              // it yields personal-use-only and that is worth knowing first.
+              meta: { license: site.license, personalUseOnly: site.personalUseOnly },
+            });
+          } catch (error) {
+            warnings.push(`${host}: ${(error as Error).message}`);
+          }
         }
-        if (!isWikiAllowed(cache, host)) {
-          return reply.code(400).send({
-            error: `wiki host not allowed: ${host}`,
-            hint: 'add it in Settings, or to WIKI_ALLOWLIST',
-          });
-        }
-        try {
-          const target = await targetFor(cache, host.toLowerCase());
-          return reply.send({
-            source,
-            entries: await listWikiPages(cache, target, prefix ?? ''),
-            warnings: [],
-          });
-        } catch (error) {
-          return reply.send({
-            source,
-            entries: [],
-            warnings: [`${host}: ${(error as Error).message}`],
-          });
-        }
+        return reply.send({ source, entries, warnings });
       }
       default:
         return reply.code(400).send({ error: `no browse listing for source: ${source}` });

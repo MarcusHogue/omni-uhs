@@ -24,7 +24,16 @@ export interface CatalogEntry {
    * Unset for single-host sources, where it would be noise.
    */
   host?: string;
-  meta?: { year?: number; platform?: string; complete?: boolean; size?: number; date?: string };
+  meta?: {
+    year?: number;
+    platform?: string;
+    complete?: boolean;
+    size?: number;
+    date?: string;
+    /** For wiki games: the licence decides what an export may include. */
+    license?: string;
+    personalUseOnly?: boolean;
+  };
 }
 
 export interface CatalogGroup {
