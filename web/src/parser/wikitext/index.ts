@@ -383,6 +383,54 @@ function expandedText(buffer: string, expanded: Record<string, string>): string 
  */
 const PAGE_CONTEXT = /\b(PAGENAME|SUBPAGENAME|FULLPAGENAME|BASEPAGENAME|NAMESPACE|REVISIONID|SITENAME)\b/;
 
+/**
+ * The pages a page links to, in the order it links to them.
+ *
+ * For a walkthrough this *is* the structure. StrategyWiki writes a game as a
+ * hand-ordered index — `Chrono Trigger/Walkthrough` naming its chapters in the
+ * order you play them — and the order is the whole value: a walkthrough sorted
+ * alphabetically is not a walkthrough. `prop=links` cannot supply it, because
+ * the API returns links alphabetically, so it has to come from the wikitext.
+ *
+ * Deliberately not `toInline`, which resolves against a set of already-known
+ * pages; here the links are what *decides* the set. Section headings come back
+ * too, so a caller can tell where a run of links sits — which is how the
+ * appendices are found without hard-coding their titles.
+ */
+export interface OrderedLink {
+  /** Normalised page title, as MediaWiki would compare it. */
+  title: string;
+  /** The nearest heading above this link, or '' in the lead. */
+  section: string;
+}
+
+export function orderedLinks(wikitext: string): OrderedLink[] {
+  const found: OrderedLink[] = [];
+  const seen = new Set<string>();
+  // Templates first: a navigation box expands to links that are not the page's
+  // own ordering, and file links are pictures rather than chapters.
+  const text = stripFileLinks(stripBlockMarkup(wikitext));
+
+  let section = '';
+  for (const line of text.split('\n')) {
+    const heading = /^(={2,6})\s*(.+?)\s*\1\s*$/.exec(line);
+    if (heading) {
+      section = stripMarkup(heading[2]!);
+      continue;
+    }
+    for (const match of line.matchAll(WIKILINK)) {
+      const target = match[1]!;
+      // `[[:Category:X]]` and interwiki links are filing, not chapters.
+      if (target.startsWith(':') || /^[a-z-]{2,12}:/.test(target)) continue;
+      const title = normalizePageTitle(target);
+      if (!title || seen.has(title)) continue;
+      seen.add(title);
+      found.push({ title, section });
+    }
+  }
+  return found;
+}
+
 export function collectExpandable(wikitext: string): string[] {
   const found = new Set<string>();
   for (const match of stripBlockMarkup(wikitext).matchAll(/\{\{([^{}\n]*)\}\}/g)) {

@@ -4,6 +4,7 @@ import type { HintGroupNode, ParseResult, SubjectNode, TextNode } from '../../sr
 import { inlineText, walk } from '../../src/parser/ast.js';
 import {
   collectExpandable,
+  orderedLinks,
   parseWikiWalkthrough,
   splitSections,
   stripMarkup,
@@ -471,6 +472,59 @@ describe('markup that is not markup', () => {
     expect(stripMarkup('<code>FIND_RABBIT</code>')).toBe('FIND_RABBIT');
     // `<math>` goes; the arithmetic inside it is the content.
     expect(stripMarkup('<math>0 + 5 + 13 = 18</math>')).toBe('0 + 5 + 13 = 18');
+  });
+});
+
+describe('orderedLinks', () => {
+  // Shaped after StrategyWiki, where a game's chapters are sibling subpages and
+  // the Walkthrough page is the hand-ordered index that names them. The order is
+  // the whole value: a walkthrough sorted alphabetically is not a walkthrough,
+  // and `prop=links` returns alphabetical, so it has to come from the wikitext.
+  const INDEX = `{{Header Nav|game=Chrono Trigger}}
+The walkthrough is split by era.
+
+==Walkthrough==
+* [[Chrono Trigger/The Millennial Fair|The Millennial Fair]]
+* [[Chrono Trigger/Beyond the Ruins]]
+* [[Chrono Trigger/Break the Seal!]]
+
+==Appendices==
+* [[Chrono Trigger/Characters]]
+* [[:Category:Chrono Trigger]]
+* [[fr:Chrono Trigger]]
+`;
+
+  it('keeps the page order, not alphabetical order', () => {
+    expect(orderedLinks(INDEX).map((link) => link.title)).toEqual([
+      'Chrono Trigger/The Millennial Fair',
+      'Chrono Trigger/Beyond the Ruins',
+      'Chrono Trigger/Break the Seal!',
+      'Chrono Trigger/Characters',
+    ]);
+  });
+
+  it('says which section each link sat under', () => {
+    // How the appendices are found without hard-coding their titles.
+    const bySection = orderedLinks(INDEX).map((link) => link.section);
+    expect(bySection).toEqual(['Walkthrough', 'Walkthrough', 'Walkthrough', 'Appendices']);
+  });
+
+  it('leaves out filing and interwiki links', () => {
+    const titles = orderedLinks(INDEX).map((link) => link.title);
+    expect(titles.join(' ')).not.toContain('Category:');
+    expect(titles).not.toContain('Fr:Chrono Trigger');
+  });
+
+  it('drops duplicates, keeping the first appearance', () => {
+    const links = orderedLinks('* [[A]]\n* [[B]]\n* [[A]]\n');
+    expect(links.map((link) => link.title)).toEqual(['A', 'B']);
+  });
+
+  it('ignores pictures and navigation templates', () => {
+    // A nav box expands to links that are not this page's ordering, and a file
+    // link is a picture rather than a chapter.
+    const links = orderedLinks('[[File:Map.png|thumb|see [[Cave]]]]\n{{Footer Nav|game=X}}\n* [[Real]]\n');
+    expect(links.map((link) => link.title)).toEqual(['Real']);
   });
 });
 
