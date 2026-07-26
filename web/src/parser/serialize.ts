@@ -9,7 +9,7 @@
  * the parser directory free of DOM and Node dependencies.
  */
 
-import type { HintDocument, ImageNode, Node, SubjectNode } from './ast.js';
+import type { HintDocument, ImageNode, Node, SubjectNode, TableCell } from './ast.js';
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
 
@@ -61,6 +61,18 @@ type SerializedNode = Omit<Node, 'data'> & { data?: string };
 const serializeImages = (images: ImageNode[] | undefined): unknown[] | undefined =>
   images?.map(serializeNode);
 
+const serializeCell = (cell: TableCell): unknown =>
+  cell.images ? { ...cell, images: serializeImages(cell.images) } : cell;
+
+const deserializeCell = (value: unknown): TableCell => {
+  const cell = value as Record<string, unknown>;
+  if (!cell['images']) return cell as unknown as TableCell;
+  return {
+    ...(cell as unknown as TableCell),
+    images: (cell['images'] as unknown[]).map(deserializeNode) as ImageNode[],
+  };
+};
+
 function serializeNode(node: Node): unknown {
   if (node.type === 'image') {
     const { data, ...rest } = node;
@@ -72,6 +84,13 @@ function serializeNode(node: Node): unknown {
   if (node.type === 'text') {
     return node.images ? { ...node, images: serializeImages(node.images) } : node;
   }
+  if (node.type === 'table') {
+    return {
+      ...node,
+      headers: node.headers.map(serializeCell),
+      rows: node.rows.map((row) => row.map(serializeCell)),
+    };
+  }
   if (node.type === 'hints') {
     return {
       ...node,
@@ -79,6 +98,7 @@ function serializeNode(node: Node): unknown {
         ...hint,
         ...(hint.nested ? { nested: hint.nested.map(serializeNode) } : {}),
         ...(hint.images ? { images: serializeImages(hint.images) } : {}),
+        ...(hint.tables ? { tables: hint.tables.map(serializeNode) } : {}),
       })),
     };
   }
@@ -105,11 +125,19 @@ function deserializeNode(value: unknown): Node {
     if (!node['images']) return node as unknown as Node;
     return { ...node, images: (node['images'] as unknown[]).map(deserializeNode) } as unknown as Node;
   }
+  if (node['type'] === 'table') {
+    return {
+      ...node,
+      headers: (node['headers'] as unknown[]).map(deserializeCell),
+      rows: (node['rows'] as unknown[][]).map((row) => row.map(deserializeCell)),
+    } as unknown as Node;
+  }
   if (node['type'] === 'hints') {
     const hints = (node['hints'] as Record<string, unknown>[]).map((hint) => ({
       ...hint,
       ...(hint['nested'] ? { nested: (hint['nested'] as unknown[]).map(deserializeNode) } : {}),
       ...(hint['images'] ? { images: (hint['images'] as unknown[]).map(deserializeNode) } : {}),
+      ...(hint['tables'] ? { tables: (hint['tables'] as unknown[]).map(deserializeNode) } : {}),
     }));
     return { ...node, hints } as unknown as Node;
   }

@@ -34,7 +34,7 @@
  * of the syntax and is handled below.
  */
 
-import type { Inline } from '../ast';
+import type { TableNode } from '../ast';
 
 export interface TableRef {
   caption: string;
@@ -208,7 +208,11 @@ export function extractTables(wikitext: string): { text: string; tables: TableRe
     if (trimmed.startsWith('|+')) {
       caption = stripCellAttributes(trimmed.slice(2)).trim();
     } else if (trimmed.startsWith('|-')) {
-      inHeader = false;
+      // Only once something has been collected. Fandom's standard
+      // `article-table` opens with a `|-` *before* its header row, and treating
+      // that as the end of the header block turned all three headings into a
+      // data row and left the table with no header at all.
+      if (headers.length > 0 || rows.length > 0 || row !== null) inHeader = false;
       endRow();
     } else if (trimmed.startsWith('!')) {
       const cells = splitCells(trimmed.slice(1), '!!');
@@ -231,8 +235,8 @@ export function extractTables(wikitext: string): { text: string; tables: TableRe
 }
 
 /** Every cell of a table, for callers that only want its words. */
-export function tableText(table: { headers: Inline[][]; rows: Inline[][][] }): string[] {
+export function tableText(table: Pick<TableNode, 'headers' | 'rows'>): string[] {
   return [...table.headers, ...table.rows.flat()].map((cell) =>
-    cell.map((part) => (part.kind === 'run' ? part.text : part.label)).join(''),
+    cell.content.map((part) => (part.kind === 'run' ? part.text : part.label)).join(''),
   );
 }

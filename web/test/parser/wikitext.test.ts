@@ -488,6 +488,32 @@ describe('markup that is not markup', () => {
     expect(stripMarkup('a long {{roomtype|Puzzle}};')).toBe('a long Puzzle;');
   });
 
+  it('keeps a number a template stands in for', () => {
+    // The Hollow Knight wiki writes every price as `{{G|112}}`, and rejecting
+    // digits deleted it outright: "costs {{G|112}} here" arrived as "costs
+    // here", with nothing to show a number had gone. A *dimension* is still
+    // layout, and the unit is what tells the two apart.
+    expect(stripMarkup('costs {{G|112}} here')).toBe('costs 112 here');
+    expect(stripMarkup('a {{HP|45}} boss')).toBe('a 45 boss');
+    expect(stripMarkup('{{Reflist|30em}}')).toBe('');
+    // A bare count is excluded by name, not by looking at the value — nothing
+    // about "2" distinguishes a column count from a price.
+    expect(stripMarkup('{{Reflist|2}}')).toBe('');
+    expect(stripMarkup('{{Hr|small}}')).toBe('');
+  });
+
+  it('still asks the wiki about a number, and prefers its answer', () => {
+    // A digit-only reading is a fallback, not an answer: the unit lives in the
+    // template. Obra Dinn's `{{short|3-3}}` is the case that proves it matters
+    // — readable as "3-3", but the wiki turns it into the chapter's name.
+    expect(collectExpandable('{{G|112}} and {{short|3-3}}')).toEqual(['G|112', 'short|3-3']);
+    // A reading with words in it needs no help, so it costs no request.
+    expect(collectExpandable('a {{roomtype|Puzzle}} room')).toEqual([]);
+    // And templates inside a table are asked about too — `stripBlockMarkup`
+    // erases those, so a page whose prices were all table-bound asked nothing.
+    expect(collectExpandable('{|\n|-\n| Quill || {{G|120}}\n|}')).toEqual(['G|120']);
+  });
+
   it('keeps the pointer when a link label was nothing but a template', () => {
     // StrategyWiki writes `[[../Tabs|{{ctcontrol|Power Tab|Strength Capsule}}]]`
     // — two unnamed parameters, so the template is dropped as unreadable, which

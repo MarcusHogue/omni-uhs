@@ -9,7 +9,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import type { TableNode } from '../../src/parser/ast.js';
+import type { TableCell, TableNode } from '../../src/parser/ast.js';
 import { walk } from '../../src/parser/ast.js';
 import { deserializeDocument, serializeDocument } from '../../src/parser/serialize.js';
 import { parseWikiWalkthrough } from '../../src/parser/wikitext/index.js';
@@ -46,8 +46,8 @@ const tablesIn = (wikitext: string, title = 'Chrono Trigger/Inns'): TableNode[] 
   return [...walk(document.root)].filter((n): n is TableNode => n.type === 'table');
 };
 
-const plain = (cell: { kind: string; text?: string; label?: string }[]): string =>
-  cell.map((part) => (part.kind === 'run' ? part.text : part.label)).join('');
+const plain = (cell: TableCell): string =>
+  cell.content.map((part) => (part.kind === 'run' ? part.text : part.label)).join('');
 
 describe('extractTables', () => {
   it('reads header and rows, one cell per column', () => {
@@ -83,6 +83,26 @@ describe('extractTables', () => {
     const [table] = extractTables(perLine).tables;
     expect(table!.headers).toEqual(['Name', 'Description']);
     expect(table!.rows).toEqual([['Sword', 'Sharp']]);
+  });
+
+  it('keeps the header when the table opens with a row break', () => {
+    // Fandom's standard `article-table` puts a `|-` *before* its header row, so
+    // ending the header block on the first one lost all three headings to a
+    // data row and left the table with no header at all. Verbatim from
+    // hollowknight.fandom.com "Map and Quill" (CC-BY-SA).
+    const fandom = `{| class="article-table formatted-table" style="width: 100%;"
+|-
+! style="min-width: 96px;" | Item
+! Description
+! style="min-width: 5rem;" | Cost
+|-
+| Quill
+| <i>Used to record one's travels.</i>
+| {{G|120}}
+|}`;
+    const [table] = extractTables(fandom).tables;
+    expect(table!.headers).toEqual(['Item', 'Description', 'Cost']);
+    expect(table!.rows).toHaveLength(1);
   });
 
   it('treats a ! after the first row break as a row header, not a heading', () => {
@@ -177,7 +197,7 @@ describe('tables in a parsed page', () => {
       OPTIONS,
     );
     const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
-    expect(table.rows[0]![0]![0]).toMatchObject({ kind: 'link', label: 'Iron Blade' });
+    expect(table.rows[0]![0]!.content[0]).toMatchObject({ kind: 'link', label: 'Iron Blade' });
   });
 
   it('puts the table in the section it was written in', () => {
@@ -262,6 +282,24 @@ After.`;
     const table = [...walk(back.root)].find((n): n is TableNode => n.type === 'table')!;
     expect(table.rows).toHaveLength(5);
     expect(plain(table.rows[4]![0]!)).toBe('Truce Inn');
+
+    // A cell's picture too — `JSON.stringify` turns a Uint8Array into `{}`, so
+    // a node the serializer does not know about comes back with no `data` and
+    // no way to tell it from one that never had any.
+    const withIcon = parseWikiWalkthrough(
+      [
+        {
+          title: 'Hollow Knight/Items',
+          wikitext: '{|\n|-\n| [[File:Quill.png|thumb]]Quill || 120\n|}',
+          revision: '1',
+        },
+      ],
+      { ...OPTIONS, kind: 'fandom', gameTitle: 'Hollow Knight', images: true },
+    ).document;
+    const cycled = deserializeDocument(JSON.parse(JSON.stringify(serializeDocument(withIcon))));
+    const icon = [...walk(cycled.root)].find((n) => n.type === 'image');
+    expect(icon).toMatchObject({ type: 'image' });
+    expect((icon as { data: Uint8Array }).data).toBeInstanceOf(Uint8Array);
   });
 
   it('keeps a table inside a spoiler behind the spoiler', () => {
@@ -284,7 +322,9 @@ After.`;
 
     const hints = [...walk(document.root)].flatMap((n) => (n.type === 'hints' ? n.hints : []));
     const hint = hints.find((h) => h.tables);
-    expect(hint?.tables?.[0]?.rows).toEqual([[[{ kind: 'run', text: '1' }], [{ kind: 'run', text: '2' }]]]);
+    expect(hint?.tables?.[0]?.rows).toEqual([
+      [{ content: [{ kind: 'run', text: '1' }] }, { content: [{ kind: 'run', text: '2' }] }],
+    ]);
     // Behind the reveal, not beside it: a table in a spoiler is the answer.
     expect([...walk(document.root)].filter((n) => n.type === 'table')).toHaveLength(1);
     const prose = [...walk(document.root)]
@@ -317,7 +357,81 @@ After.`;
       OPTIONS,
     );
     const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
-    expect(table.rows[0]![0]![0]).toEqual({ kind: 'run', text: 'Iron Blade' });
+    expect(table.rows[0]![0]!.content[0]).toEqual({ kind: 'run', text: 'Iron Blade' });
+  });
+
+  it('reads the templates in a cell instead of printing them', () => {
+    // The reported bug. Cells bypass `toBlocks`, which is what strips templates
+    // for prose, and `toInline` has never done it — so every template in every
+    // cell reached the reader as source: `{{G|112}}` in a Cost column.
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Hollow Knight/Map and Quill',
+          wikitext: '{|\n|-\n! Item !! Cost\n|-\n| Quill || {{G|120}}\n|}',
+          revision: '1',
+        },
+      ],
+      { ...OPTIONS, kind: 'fandom', gameTitle: 'Hollow Knight' },
+    );
+    const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
+    expect(plain(table.rows[0]![1]!)).toBe('120');
+  });
+
+  it('prefers what the wiki says a cell\'s template means', () => {
+    // `{{G|120}}` renders as a coin icon beside the number, so the parameter
+    // alone is a fallback rather than the answer — the expansion is asked for
+    // and used when it arrives. Here it resolves to the same digits, which is
+    // the point: both paths agree, and neither leaves the cell empty.
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Hollow Knight/Map and Quill',
+          wikitext: '{|\n|-\n| Quill || {{G|120}}\n|}',
+          revision: '1',
+        },
+      ],
+      {
+        ...OPTIONS,
+        kind: 'fandom',
+        gameTitle: 'Hollow Knight',
+        expanded: { 'G|120': '[[File:Geo.png|20x20px|link=Geo|Base Geo drop value]] 120' },
+      },
+    );
+    const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
+    expect(plain(table.rows[0]![1]!)).toBe('120');
+  });
+
+  it('keeps the icon in a cell, and lets walk() find it', () => {
+    // Hollow Knight files its items as a table with the picture in the first
+    // column. A cell that was only `Inline[]` had nowhere to put it, so the
+    // icon was dropped and the name stood alone. Verbatim from
+    // hollowknight.fandom.com "Map and Quill" (CC-BY-SA).
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Hollow Knight/Map and Quill',
+          wikitext:
+            '{|\n|-\n| <center>[[File:Quill.png|thumb|72x72px|center]]<br>\nQuill</center>\n| {{G|120}}\n|}',
+          revision: '1',
+        },
+      ],
+      { ...OPTIONS, kind: 'fandom', gameTitle: 'Hollow Knight', images: true },
+    );
+
+    const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
+    const cell = table.rows[0]![0]!;
+    expect(cell.images?.[0]?.source?.file).toBe('Quill.png');
+    // The name is still there beside it.
+    expect(plain(cell)).toContain('Quill');
+    // Reachable by walk(), which is what the download collects through and what
+    // the orphan sweep counts as "in use" — miss it and the sweep deletes it.
+    expect([...walk(document.root)].filter((n) => n.type === 'image')).toHaveLength(1);
+  });
+
+  it('records no cell pictures when images are off', () => {
+    const tables = tablesIn('{|\n|-\n| [[File:Quill.png|thumb]]Quill || 120\n|}');
+    expect(tables[0]!.rows[0]![0]!.images).toBeUndefined();
   });
 
   it('leaves a layout-only table out rather than emitting an empty one', () => {
