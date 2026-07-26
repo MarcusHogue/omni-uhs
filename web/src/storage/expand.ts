@@ -34,10 +34,6 @@ const SEPARATOR = '\n{{{OMNI-UHS-SPLIT}}}\n';
  */
 const BATCH_CHARS = 1200;
 
-interface ExpandResponse {
-  expandtemplates?: { wikitext?: string };
-}
-
 /** Group calls into requests small enough to send as a query string. */
 function batches(calls: string[]): string[][] {
   const out: string[][] = [];
@@ -55,6 +51,28 @@ function batches(calls: string[]): string[][] {
   if (current.length > 0) out.push(current);
   return out;
 }
+
+interface ExpandResponse {
+  expandtemplates?: { wikitext?: string };
+}
+
+/**
+ * Two contexts to expand each batch in.
+ *
+ * The parser already refuses to ask about a call that *names* a page-context
+ * magic word, but that only inspects the invocation. A template's own
+ * definition can consult `{{PAGENAME}}` without the call site showing it, and
+ * one shared answer substituted onto every page would be confidently wrong
+ * rather than merely missing — the exact failure the syntactic check was meant
+ * to prevent.
+ *
+ * So the behaviour is tested rather than assumed: expand each batch under two
+ * different titles and keep only the calls that answered the same both times.
+ * Verified against animalwell.wiki.gg — `{{AW}}` is identical under both,
+ * `{{PAGENAME}}` differs and is discarded. One extra request per batch, which
+ * for a whole game is one or two.
+ */
+const PROBE_TITLES = ['Omni UHS expansion probe A', 'Omni UHS expansion probe B'];
 
 export interface ExpandResult {
   /** Call inner text -> what the wiki says it expands to. */
@@ -79,32 +97,38 @@ export async function expandTemplates(
   if (calls.length === 0) return { expanded, warnings };
 
   for (const batch of batches(calls)) {
+    const text = batch.map((call) => `{{${call}}}`).join(SEPARATOR);
     try {
-      const response = await api.wiki<ExpandResponse>(
-        host,
-        {
-          action: 'expandtemplates',
-          prop: 'wikitext',
-          text: batch.map((call) => `{{${call}}}`).join(SEPARATOR),
-        },
-        signal,
-      );
-      const wikitext = response.expandtemplates?.wikitext;
-      if (wikitext === undefined) continue;
-
-      const parts = wikitext.split(SEPARATOR.trim());
-      // If the separator did not survive intact, the parts no longer line up
-      // with the calls and pairing them would attach one template's text to
-      // another's name. Dropping the batch loses words; guessing invents them.
-      if (parts.length !== batch.length) {
-        warnings.push(
-          `could not expand ${batch.length} template${batch.length === 1 ? '' : 's'}: the wiki's reply did not line up`,
+      const answers: string[][] = [];
+      for (const title of PROBE_TITLES) {
+        const response = await api.wiki<ExpandResponse>(
+          host,
+          { action: 'expandtemplates', prop: 'wikitext', title, text },
+          signal,
         );
-        continue;
+        const wikitext = response.expandtemplates?.wikitext;
+        if (wikitext === undefined) break;
+        const parts = wikitext.split(SEPARATOR.trim());
+        // If the separator did not survive intact, the parts no longer line up
+        // with the calls and pairing them would attach one template's text to
+        // another's name. Dropping the batch loses words; guessing invents them.
+        if (parts.length !== batch.length) {
+          warnings.push(
+            `could not expand ${batch.length} template${batch.length === 1 ? '' : 's'}: the wiki's reply did not line up`,
+          );
+          break;
+        }
+        answers.push(parts.map((part) => part.trim()));
       }
+      if (answers.length !== PROBE_TITLES.length) continue;
+
       batch.forEach((call, i) => {
-        const value = parts[i]!.trim();
-        if (value && value !== `{{${call}}}`) expanded[call] = value;
+        const value = answers[0]![i]!;
+        if (!value || value === `{{${call}}}`) return;
+        // Disagreed between the two contexts: this depends on the page, and
+        // these answers are shared across a whole game.
+        if (answers.some((answer) => answer[i] !== value)) return;
+        expanded[call] = value;
       });
     } catch (error) {
       if ((error as Error).name === 'AbortError') throw error;

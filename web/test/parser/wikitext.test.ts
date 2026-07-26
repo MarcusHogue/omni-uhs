@@ -451,6 +451,29 @@ describe('templates standing in for words', () => {
   });
 });
 
+describe('markup that is not markup', () => {
+  it('strips a tag only when the name is one', () => {
+    // Matching any `<name …>` is not safe: in `if x<y and a=b>0` the middle
+    // reads as a tag called `y` with two attributes, and stripping it left
+    // `if x0`. Attribute syntax does not disambiguate it either — `and a=b` is
+    // valid attribute syntax — so the name has to be known.
+    expect(stripMarkup('if x<y and a=b>0')).toBe('if x<y and a=b>0');
+    expect(stripMarkup('if x<y and a>b')).toBe('if x<y and a>b');
+    expect(stripMarkup('damage <10 per hit')).toBe('damage <10 per hit');
+
+    // And the tags that actually turned up across six wikis all go.
+    expect(stripMarkup('<h2>Usefulness</h2> text')).toBe('Usefulness text');
+    expect(stripMarkup('<p class="MsoNormal">para</p>')).toBe('para');
+    expect(stripMarkup('<noinclude>x</noinclude>')).toBe('x');
+    expect(stripMarkup('<twitterfeed theme=dark linkcolor=#5a93cc>feed</twitterfeed>')).toBe(
+      'feed',
+    );
+    expect(stripMarkup('<code>FIND_RABBIT</code>')).toBe('FIND_RABBIT');
+    // `<math>` goes; the arithmetic inside it is the content.
+    expect(stripMarkup('<math>0 + 5 + 13 = 18</math>')).toBe('0 + 5 + 13 = 18');
+  });
+});
+
 describe('template expansion', () => {
   const parse = (wikitext: string, expanded: Record<string, string> = {}): ParseResult =>
     parseWikiWalkthrough([{ title: 'Secret rabbits', wikitext, revision: '1' }], {
@@ -507,6 +530,15 @@ describe('template expansion', () => {
 
   it('behaves exactly as before when nothing was expanded', () => {
     expect(text(PAGE, {})).toBe(text(PAGE));
+  });
+
+  it('looks up own properties only', () => {
+    // A wiki is untrusted input. `{{constructor}}` on a plain object resolves
+    // to `Object` — truthy, so optional chaining waves it through — and calling
+    // `.trim()` on a function throws and takes the whole download with it.
+    expect(() => text('== S ==\nA {{constructor}} here.\n')).not.toThrow();
+    expect(() => text('== S ==\nA {{toString}} here.\n')).not.toThrow();
+    expect(text('== S ==\nA {{constructor}} here.\n')).toContain('A here.');
   });
 });
 

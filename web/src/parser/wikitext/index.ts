@@ -131,24 +131,47 @@ const removed = (text: string): string =>
     .replace(/\[\[\s*\|/g, '[[');
 
 /**
- * An HTML tag, of any name.
+ * An HTML or MediaWiki extension tag.
  *
- * A fixed list of inline tags was not enough. Hollow Knight writes its section
- * headings as literal `<h2>Usefulness</h2>` — 77 of them across ten pages —
- * and between them the wikis in use also emit `<code>`, `<p class="MsoNormal">`,
- * `<noinclude>`, `<rss>` and `<twitterfeed theme=dark>`. All of it reached the
- * reader as text.
+ * A fixed list of *twelve* inline tags was not enough. Hollow Knight writes its
+ * section headings as literal `<h2>Usefulness</h2>` — 77 of them across ten
+ * pages — and between them the wikis in use also emit `<code>`,
+ * `<p class="MsoNormal">`, `<noinclude>`, `<rss>` and `<twitterfeed theme=dark>`.
+ * All of it reached the reader as text.
  *
- * Two patterns rather than one, so a comparison cannot be eaten: a bare tag has
- * to close immediately after the name, and one with attributes has to contain an
- * `=`. That leaves `if x<y and a>b` alone, which `<[a-z][^>]*>` would have
- * swallowed whole.
+ * The answer is a longer list, not a looser pattern. Matching any `<name …>`
+ * cannot work: in `if x<y and a=b>0` the middle reads as a tag called `y` with
+ * two attributes, and stripping it leaves `if x0`. Attribute syntax does not
+ * save it either, because `and a=b` *is* valid attribute syntax. The only thing
+ * separating a tag from a comparison is whether the name is one — so the name
+ * has to be known.
  *
- * `<math>` goes the same way and its contents stay, which is what you want:
+ * An unrecognised extension tag therefore still leaks, visibly, which is the
+ * failure worth having: text that should not be there is obvious, and text
+ * quietly deleted is not.
+ *
+ * `<math>` is in the list and its contents survive, which is what you want:
  * Blue Prince's worked examples are `<math>0 + 5 + 13 = 18</math>`.
  */
-const HTML_TAG = /<\/?[a-z][a-z0-9]{0,14}\s*\/?>/gi;
-const HTML_TAG_WITH_ATTRS = /<[a-z][a-z0-9]{0,14}\s[^<>]*=[^<>]*\/?>/gi;
+const HTML_TAGS = [
+  // HTML5.
+  'a|abbr|address|area|article|aside|audio|b|base|bdi|bdo|big|blockquote|body',
+  'br|button|canvas|caption|center|cite|code|col|colgroup|data|datalist|dd|del',
+  'details|dfn|dialog|div|dl|dt|em|embed|fieldset|figcaption|figure|font|footer',
+  'form|h1|h2|h3|h4|h5|h6|head|header|hgroup|hr|html|i|iframe|img|input|ins|kbd',
+  'label|legend|li|link|main|map|mark|menu|meta|meter|nav|noscript|object|ol',
+  'optgroup|option|output|p|param|picture|pre|progress|q|rp|rt|ruby|s|samp',
+  'script|section|select|slot|small|source|span|strike|strong|style|sub|summary',
+  'sup|table|tbody|td|textarea|tfoot|th|thead|time|title|tr|track|tt|u|ul|var',
+  'video|wbr',
+  // MediaWiki, and the extensions these wikis actually use.
+  'categorytree|ce|charinsert|chem|dynamicpagelist|gallery|graph|hiero|imagemap',
+  'includeonly|indicator|inputbox|mapframe|maplink|math|noinclude|nowiki',
+  'onlyinclude|poem|references|rss|score|syntaxhighlight|tabber|tabbertransclude',
+  'templatedata|templatestyles|timeline|twitterfeed|verbatim|youtube',
+].join('|');
+
+const HTML_TAG = new RegExp(`</?(?:${HTML_TAGS})(?=[\\s/>])[^<>]*>`, 'gi');
 
 /** Everything else, once the links have been dealt with. */
 const cleaned = (text: string): string =>
@@ -161,7 +184,6 @@ const cleaned = (text: string): string =>
     // A lone apostrophe is punctuation and is left alone.
     .replace(/'{2,}/g, '')
     .replace(HTML_TAG, '')
-    .replace(HTML_TAG_WITH_ATTRS, '')
     // What `<math>` was wrapping. Stripping the tag leaves the LaTeX, and Blue
     // Prince's worked dartboard examples are arithmetic: `\times 4 \times 2` and
     // `\frac{8}{4}` are the calculation the reader came for, so they are
@@ -334,7 +356,12 @@ const EXPANDED_MAX = 200;
 const EXPANDED_BLOCK = /\{\||<(?:div|table|ul|ol|dl|tr|td|th)\b/i;
 
 function expandedText(buffer: string, expanded: Record<string, string>): string | null {
-  const value = expanded[buffer.trim()]?.trim();
+  const key = buffer.trim();
+  // Own properties only. A wiki is untrusted input, and `{{constructor}}` on a
+  // plain object resolves to `Object` — truthy, so optional chaining waves it
+  // through, and `.trim()` on a function throws and takes the download with it.
+  if (!Object.hasOwn(expanded, key)) return null;
+  const value = expanded[key]?.trim();
   if (!value || value.includes('\n') || value.length > EXPANDED_MAX) return null;
   // Tunic's `{{Stub}}` expands to a `<div><table>` notice. Length alone would
   // usually catch it, but the test that matters is what it *is*.
