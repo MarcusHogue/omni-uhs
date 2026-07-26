@@ -52,6 +52,58 @@ It is sent to every upstream. uhs-hints.com has been dormant since ~2015 and
 IFDB rejects requests without a real User-Agent, so be identifiable and
 reachable. The other variables are documented in `.env.example`.
 
+### Adding a game wiki
+
+UHS, the IF Archive and IFDB work out of the box. Fandom and wiki.gg do not, on
+purpose: they are platforms hosting hundreds of thousands of wikis about
+everything, and neither offers a filter that would keep this to games. So you
+name the ones you want — from the app, one tap, nothing to restart:
+
+1. **Search** for the game.
+2. Tap **Look for a wiki for "…"** under the results.
+3. Each wiki that answered is listed with its real name and licence. Tap
+   **Add**.
+
+The search re-runs immediately and the wiki's pages are in it. There is no
+`.env` edit and no `docker compose up -d` — the allowlist lives in the proxy's
+cache database, which is on the same volume as everything else and is included
+in your backups.
+
+**When the guess misses.** Step 2 works by trying the addresses a wiki for that
+name would plausibly live at, because neither platform publishes a searchable
+index. It finds most games and misses the ones whose wiki is named after the
+series: Zelda's is `zelda.fandom.com`, which "Tears of the Kingdom" will never
+produce. When that happens, find the wiki in a browser and paste its address
+into **Settings → Game wikis → Add a wiki**. A pasted address is checked
+directly, so it always works.
+
+**Settings → Game wikis** lists everything you have added, with its licence, and
+removes any of them again.
+
+Each wiki is asked about itself on first contact — its name, its API path, and
+its licence — and the answer is re-checked daily. The licence is shown before
+you download anything, because it decides what you can do with the result: a
+`-NC` wiki (common on ex-Gamepedia game wikis such as Terraria's) marks
+everything from it **personal use only**, which keeps it out of a shareable
+export while leaving it in a full backup.
+
+Wiki pages are re-shaped on the way in rather than stored as written — sections
+become questions, paragraphs become hints revealed one at a time. A page that
+turns out to be all infobox and stat tables is refused with a note saying so,
+which is the expected outcome for a weapon or item page. Aim at the puzzle,
+secret and ending pages.
+
+**`WIKI_ALLOWLIST`** is still there, for seeding a fresh container with wikis
+you always want:
+
+```bash
+WIKI_ALLOWLIST=animalwell.wiki.gg,blue-prince.fandom.com
+```
+
+Anything listed there is **pinned**: shown in Settings, but not removable from
+the app, because something in the environment was put there deliberately.
+Either way, only `*.fandom.com` and `*.wiki.gg` are ever accepted.
+
 ### Changing the port
 
 `docker-compose.local.yml` publishes `127.0.0.1:8081:80` — bound to loopback, so
@@ -334,6 +386,27 @@ publishes no index to page through.
 **Downloads fail with "not allowed".** The proxy enforces a hostname allowlist
 (`UPSTREAM_ALLOWLIST`). That is the SSRF boundary; add the host deliberately or
 not at all.
+
+**"wiki host not allowed".** A Fandom or wiki.gg host that has not been added —
+see §1. Note the wiki allowlist is a separate list from `UPSTREAM_ALLOWLIST`: a
+wiki on it is reachable only through `/api/wiki/:host`, never through the
+generic fetchers.
+
+**The Fandom or wiki.gg chip is greyed out.** No wikis have been added for that
+platform, so searching it could only ever return nothing. §1 has the fix.
+
+**"Nothing answered" when looking for a wiki.** Neither platform has a search
+API, so this is guesswork from the game's name and it does miss — particularly
+where the wiki is named after the series rather than the game. Find the wiki in
+a browser and paste its address into Settings → Game wikis instead.
+
+**A wiki cannot be removed.** It came from `WIKI_ALLOWLIST` and is shown as
+*pinned*. Edit the environment variable and restart to change it.
+
+**A wiki page refuses to download, saying it looks like a reference page.**
+Working as intended. That page is mostly infobox and stat tables, with no
+prose to turn into hints — normal for an item, weapon or character page. Puzzle,
+secret, boss and ending pages are the ones that carry guidance.
 
 **Nothing loads offline.** Confirm the service worker registered: DevTools →
 Application → Service Workers. It only registers over HTTPS or on `localhost`.

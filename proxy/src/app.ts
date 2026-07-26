@@ -63,10 +63,50 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     });
   }
 
-  /** GET/HEAD only, and no request bodies are ever forwarded (spec §8). */
+  /**
+   * GET/HEAD only, and no request body is ever forwarded upstream (spec §8).
+   *
+   * The one exception is the wiki allowlist, which is *local* state: adding a
+   * wiki writes a row in this server's own database and sends nothing anywhere.
+   * The rule it must not break is that a client cannot make this server write
+   * to somebody else's site, and it does not.
+   *
+   * A state-changing GET would have been the worse trade: any page the user
+   * visits can issue one with an `<img>` tag, and no browser protection
+   * applies. Two rules keep that door shut instead:
+   *
+   * 1. Writes are POST or DELETE, on one path.
+   * 2. A POST must be `application/json`.
+   *
+   * Together those make every cross-origin attempt a *non-simple* request, so
+   * the browser must preflight it — and this server answers no OPTIONS and
+   * sends no `Access-Control-Allow-Origin`, so the preflight fails and the real
+   * request is never sent. A form POST, the one shape that dodges preflight,
+   * cannot carry a JSON content type and is refused here.
+   *
+   * Comparing `Origin` against `Host` was the obvious alternative and is the
+   * wrong check: any reverse proxy that rewrites Host — which is most of them,
+   * configurably — turns "add a wiki" into an unexplained 403.
+   */
+  const WRITABLE = /^\/api\/wiki\/allow(\/|$)/;
+
   app.addHook('onRequest', async (request, reply) => {
-    if (request.method !== 'GET' && request.method !== 'HEAD') {
+    if (request.method === 'GET' || request.method === 'HEAD') return;
+
+    const path = request.url.split('?')[0] ?? '';
+    const writable =
+      WRITABLE.test(path) && (request.method === 'POST' || request.method === 'DELETE');
+    if (!writable) {
       return reply.code(405).header('allow', 'GET, HEAD').send({ error: 'method not allowed' });
+    }
+
+    if (request.method === 'POST') {
+      const type = (request.headers['content-type'] ?? '').split(';')[0]!.trim().toLowerCase();
+      if (type !== 'application/json') {
+        return reply
+          .code(415)
+          .send({ error: 'writes must be application/json' });
+      }
     }
   });
 

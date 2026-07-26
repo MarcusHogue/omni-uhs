@@ -196,10 +196,60 @@ hammered, so everything goes through `proxy/`:
 | **IF Archive** | `indexes/Master-Index.xml` (~15 MB) is fetched daily and the hint-bearing subtrees indexed into SQLite. Includes InvisiClues transcriptions, which are already question → progressive answers. |
 | **IFDB** | Metadata and search. Cloudflare-fronted: it answers 403 without a real `User-Agent`, so the honest one is mandatory rather than merely polite. |
 | **StrategyWiki** | MediaWiki API, CC-BY-SA 4.0. Page URL and revision id are recorded and displayed. |
-| **Fandom / wiki.gg** | Route and per-wiki licence gating are in place (`WIKI_ALLOWLIST`); a `-NC` licence forces `personalUseOnly`. Not wired into search yet. |
+| **Fandom / wiki.gg** | Searchable, browsable and downloadable — but only for the wikis you name in `WIKI_ALLOWLIST`. Each is asked for its own script path and licence on first contact; a `-NC` licence forces `personalUseOnly`. Pages are re-shaped so answers reveal one at a time (see below), and reference pages are skipped. |
 
 GameFAQs, Neoseeker, Fextralife and Steam Guides are deliberately **not**
 implemented — all-rights-reserved or ToS-restricted.
+
+#### Reference wikis (Fandom, wiki.gg)
+
+Three things make these different from every other source here.
+
+**They are platforms, not sites.** Between them they host hundreds of thousands
+of wikis about everything — books, television, brands — and neither exposes a
+usable "games only" filter: Fandom's discovery API answers 403 to anything that
+is not a browser, its vertical parameter is gone, and wiki.gg has no index API
+at all. So the filter is you, one wiki at a time. Search for a game, tap
+**Look for a wiki**, and the proxy asks the addresses a wiki for it would
+plausibly live at — `blue-prince.fandom.com`, `blueprince.wiki.gg` — reporting
+each one's real name and licence. Tap **Add** and it is searchable immediately:
+the allowlist lives in the cache database, so there is nothing to restart.
+
+Guessing from a name does miss things — Zelda's wiki is `zelda.fandom.com`,
+which no slugification of "Tears of the Kingdom" will reach — so pasting a wiki
+address from a browser tab is always accepted and skips the guessing. Settings
+lists what you have added and removes it again. `WIKI_ALLOWLIST` still exists
+for seeding a fresh container; anything named there is pinned and the app will
+not remove it.
+
+Only `*.fandom.com` and `*.wiki.gg` can be added, from the app or the
+environment. Every other upstream keeps exact-hostname matching against
+`UPSTREAM_ALLOWLIST` at boot, so nothing reachable from the UI can point the
+fetcher at an internal address.
+
+**They are reference works, not walkthroughs.** A wiki page states the answer
+in its first sentence and marks nothing as a spoiler, so rendering one as
+written would give away the puzzle you opened it to get a nudge on. Wiki pages
+are therefore re-shaped: each section heading becomes a question and its
+paragraphs become hints revealed one at a time, in the order the page tells it —
+the same progressive contract as a UHS file, minus the hand-authored ordering.
+Nothing reorders them: a wiki section is often a sequence ("first do this, then
+that"), and sorting by length would shuffle the steps to gain a spoiler
+gradation the source never had. A page that is mostly infobox and stat
+tables carries no guidance at all and is skipped with a warning rather than
+stored as a wall of parameters.
+
+**Their licences vary per wiki.** Each wiki is asked for its own on first
+contact and the answer is cached; `-NC` (common on ex-Gamepedia game wikis)
+marks everything from it `personalUseOnly`, which keeps it out of a shareable
+export while leaving it in a full backup. Attribution — page URL and revision
+id — is recorded either way.
+
+Fandom's terms are stricter on paper about automated retrieval than
+StrategyWiki's. What this does is personal-use, low-volume, cached, attributed
+reading of specific pages through the documented API, with an honest
+`User-Agent` — but it is worth knowing the difference rather than assuming
+every wiki has the same posture. Neither platform is crawled.
 
 ---
 

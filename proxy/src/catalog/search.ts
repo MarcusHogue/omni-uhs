@@ -13,12 +13,61 @@ import type { Cache } from '../cache/index.js';
 import { searchIfArchive, refreshIfArchiveCatalog } from './ifarchive.js';
 import { searchIfdb } from './ifdb.js';
 import { STRATEGYWIKI, searchWiki } from './mediawiki.js';
+import { allowlistedHosts, targetFor } from './wikis.js';
 import { refreshUhsCatalog, searchUhsCatalog } from './uhs.js';
 import { normalizeTitle } from './normalize.js';
 import type { CatalogEntry, CatalogGroup, SearchResponse, SourceKind } from './types.js';
 
 /** Every source the fan-out knows how to query. */
-export const SEARCHABLE_SOURCES: SourceKind[] = ['uhs', 'ifarchive', 'strategywiki', 'ifdb'];
+export const SEARCHABLE_SOURCES: SourceKind[] = [
+  'uhs',
+  'ifarchive',
+  'strategywiki',
+  'ifdb',
+  'fandom',
+  'wikigg',
+];
+
+/**
+ * How many wikis one platform will be asked about in a single search.
+ *
+ * Each is a separate host, so they run in parallel — but every one is a real
+ * request to someone else's server, and a long WIKI_ALLOWLIST should not turn
+ * one keystroke into thirty of them.
+ */
+const WIKI_SEARCH_MAX = 8;
+
+/**
+ * Search every allowlisted wiki on a platform.
+ *
+ * Each wiki gets its own slice of the budget rather than sharing one: the outer
+ * `withTimeout` in `searchCatalog` covers the whole source, so without this a
+ * single slow wiki would starve the rest and the source would return nothing.
+ */
+async function searchPlatform(
+  cache: Cache,
+  kind: SourceKind,
+  query: string,
+): Promise<CatalogEntry[]> {
+  const hosts = allowlistedHosts(cache, kind).slice(0, WIKI_SEARCH_MAX);
+  if (hosts.length === 0) return [];
+
+  const perWiki = Math.max(2000, Math.floor(config.searchTimeoutMs * 0.8));
+  const results = await Promise.all(
+    hosts.map(async (host) => {
+      try {
+        const target = await targetFor(cache, host);
+        return await withTimeout(host, perWiki, searchWiki(cache, target, query, 10));
+      } catch (error) {
+        // One unreachable wiki must not fail the platform. It is logged rather
+        // than surfaced: the user allowlisted a host, not a promise it is up.
+        log.search.warn({ host, kind, err: (error as Error).message }, `${host} search failed`);
+        return [] as CatalogEntry[];
+      }
+    }),
+  );
+  return results.flat();
+}
 
 /**
  * What a search hits when the caller does not say.
@@ -40,6 +89,8 @@ export interface SourceInfo {
   enabledByDefault: boolean;
   /** Shown next to the chip when there is something the user should know. */
   note?: string;
+  /** For the multi-wiki platforms: which wikis are allowlisted. */
+  hosts?: string[];
 }
 
 const SOURCE_NOTES: Partial<Record<SourceKind, string>> = {
@@ -48,16 +99,28 @@ const SOURCE_NOTES: Partial<Record<SourceKind, string>> = {
     'so a server cannot read it. Off by default; turn it on to try anyway.',
   ifdb: 'A catalogue, not a hint source — it tells you a game exists, but the ' +
     'hints come from UHS or the IF Archive.',
+  fandom:
+    'Reference wikis, not walkthroughs. Only the wikis you list in ' +
+    'WIKI_ALLOWLIST are searched, and pages are re-shaped so answers reveal ' +
+    'one at a time rather than all at once.',
+  wikigg:
+    'Reference wikis, not walkthroughs. Only the wikis you list in ' +
+    'WIKI_ALLOWLIST are searched. Many are CC-BY-NC-SA, which marks them ' +
+    'personal-use-only.',
 };
 
 /** What the UI needs to render the source chips without hard-coding policy. */
-export function describeSources(): SourceInfo[] {
+export function describeSources(cache: Cache): SourceInfo[] {
   return SEARCHABLE_SOURCES.map((kind) => {
     const note = SOURCE_NOTES[kind];
+    // The wiki platforms do nothing until a host is allowlisted, so the UI
+    // needs to know which ones exist — and to say so when there are none.
+    const hosts = kind === 'fandom' || kind === 'wikigg' ? allowlistedHosts(cache, kind) : [];
     return {
       kind,
       enabledByDefault: DEFAULT_SEARCH_SOURCES.includes(kind),
       ...(note ? { note } : {}),
+      ...(hosts.length > 0 ? { hosts } : {}),
     };
   });
 }
@@ -90,8 +153,8 @@ const RUNNERS: Record<SourceKind, SourceRunner | undefined> = {
   },
   strategywiki: (cache, query) => searchWiki(cache, STRATEGYWIKI, query),
   ifdb: (cache, query) => searchIfdb(cache, query),
-  fandom: undefined,
-  wikigg: undefined,
+  fandom: (cache, query) => searchPlatform(cache, 'fandom', query),
+  wikigg: (cache, query) => searchPlatform(cache, 'wikigg', query),
 };
 
 /**

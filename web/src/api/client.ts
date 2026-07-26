@@ -12,6 +12,8 @@ export interface CatalogEntry {
   title: string;
   normalizedTitle: string;
   ref: string;
+  /** Which wiki, for the multi-wiki sources. Unset elsewhere. */
+  host?: string;
   meta?: { year?: number; platform?: string; complete?: boolean; size?: number; date?: string };
 }
 
@@ -30,10 +32,39 @@ export interface SearchResponse {
   challenged?: SourceKind[];
 }
 
+/** What the proxy knows about an allowlisted wiki. */
+export interface WikiSite {
+  host: string;
+  kind: SourceKind;
+  sitename: string;
+  license: string;
+  licenseUrl: string;
+  personalUseOnly: boolean;
+  gamepedia: boolean;
+  /** Named in WIKI_ALLOWLIST, so the app cannot remove it. */
+  pinned?: boolean;
+  /** Set when an allowlisted wiki would not answer. */
+  error?: string;
+}
+
+/** A wiki the proxy found and verified, offered for adding. */
+export interface WikiCandidate extends WikiSite {
+  allowed: boolean;
+  pinned: boolean;
+}
+
+export interface DiscoveryResult {
+  query: string;
+  candidates: WikiCandidate[];
+  probed: string[];
+}
+
 export interface SourceInfo {
   kind: SourceKind;
   enabledByDefault: boolean;
   note?: string;
+  /** For the multi-wiki platforms: which wikis WIKI_ALLOWLIST permits. */
+  hosts?: string[];
 }
 
 export interface ListResponse {
@@ -85,6 +116,42 @@ async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
       body.error ?? `Request failed (${response.status})`,
       response.status,
       body.code,
+    );
+  }
+  return (await response.json()) as T;
+}
+
+/** A request that changes something. Only the wiki allowlist uses these. */
+async function sendJson<T>(
+  method: 'POST' | 'DELETE',
+  path: string,
+  body?: unknown,
+  signal?: AbortSignal,
+): Promise<T> {
+  let response: Response;
+  try {
+    response = await fetch(path, {
+      method,
+      signal,
+      headers: {
+        accept: 'application/json',
+        ...(body === undefined ? {} : { 'content-type': 'application/json' }),
+      },
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+    });
+  } catch (error) {
+    if ((error as Error).name === 'AbortError') throw error;
+    throw new ApiError('Cannot reach the hint proxy — you may be offline.', 0);
+  }
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => ({}))) as {
+      error?: string;
+      code?: string;
+    };
+    throw new ApiError(
+      payload.error ?? `Request failed (${response.status})`,
+      response.status,
+      payload.code,
     );
   }
   return (await response.json()) as T;
@@ -162,9 +229,63 @@ export const api = {
     return getJson<{ sources: SourceInfo[] }>('/api/catalog/sources', signal);
   },
 
-  list(source: string, prefix?: string, signal?: AbortSignal): Promise<ListResponse> {
+  /**
+   * A MediaWiki API call against any allowlisted wiki.
+   *
+   * The generic form of `strategyWiki`. No browser-direct fallback: that exists
+   * only because StrategyWiki bot-challenges the server, and neither Fandom nor
+   * wiki.gg does on api.php.
+   */
+  wiki<T>(host: string, params: Record<string, string>, signal?: AbortSignal): Promise<T> {
+    return getJson<T>(
+      `/api/wiki/${encodeURIComponent(host)}?${new URLSearchParams(params)}`,
+      signal,
+    );
+  },
+
+  /** Name and licence of an allowlisted wiki — the licence gate's input. */
+  wikiSite(host: string, signal?: AbortSignal): Promise<WikiSite> {
+    return getJson<WikiSite>(`/api/wiki/${encodeURIComponent(host)}/site`, signal);
+  },
+
+  /**
+   * Look for a wiki about a game. Read-only: it offers hosts, it does not make
+   * any of them reachable — `allowWiki` does that.
+   */
+  discoverWikis(query: string, signal?: AbortSignal): Promise<DiscoveryResult> {
+    return getJson<DiscoveryResult>(
+      `/api/wiki/discover?q=${encodeURIComponent(query)}`,
+      signal,
+    );
+  },
+
+  /** Every wiki this deployment may read. */
+  allowedWikis(signal?: AbortSignal): Promise<{ wikis: WikiSite[] }> {
+    return getJson<{ wikis: WikiSite[] }>('/api/wiki/allow', signal);
+  },
+
+  /** Add a wiki. Live immediately — no restart, no .env. */
+  async allowWiki(host: string, signal?: AbortSignal): Promise<WikiSite> {
+    return sendJson<WikiSite>('POST', '/api/wiki/allow', { host }, signal);
+  },
+
+  async forgetWiki(host: string, signal?: AbortSignal): Promise<void> {
+    await sendJson('DELETE', `/api/wiki/allow/${encodeURIComponent(host)}`, undefined, signal);
+  },
+
+  /**
+   * A browse listing. `host` picks the wiki for the platform sources, where
+   * `source` names a platform rather than a single site.
+   */
+  list(
+    source: string,
+    prefix?: string,
+    signal?: AbortSignal,
+    host?: string,
+  ): Promise<ListResponse> {
     const params = new URLSearchParams();
     if (prefix) params.set('prefix', prefix);
+    if (host) params.set('host', host);
     return getJson<ListResponse>(`/api/catalog/${source}/list?${params}`, signal);
   },
 

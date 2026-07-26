@@ -82,6 +82,38 @@ describe('service basics', () => {
       expect(response.statusCode).toBe(405);
     }
   });
+
+  // The wiki allowlist is the sole exception, and only for POST and DELETE.
+  // Everything else on that path is still refused, so the exception cannot be
+  // widened by accident.
+  it('allows writes only on the wiki allowlist, and only two methods', async () => {
+    for (const method of ['PUT', 'PATCH'] as const) {
+      const response = await app.inject({ method, url: '/api/wiki/allow' });
+      expect(response.statusCode).toBe(405);
+    }
+    const post = await app.inject({ method: 'POST', url: '/api/wiki/allow', payload: {} });
+    expect(post.statusCode).not.toBe(405);
+  });
+
+  it('refuses a write that is not JSON', async () => {
+    // This is the CSRF defence. A form POST is the one cross-origin shape a
+    // browser will send without a preflight, and it cannot claim a JSON
+    // content type — so requiring one forces a preflight this server never
+    // answers.
+    const response = await app.inject({
+      method: 'POST',
+      url: '/api/wiki/allow',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      payload: 'host=blue-prince.fandom.com',
+    });
+    expect(response.statusCode).toBe(415);
+  });
+
+  it('answers no OPTIONS, so a cross-origin preflight cannot succeed', async () => {
+    const response = await app.inject({ method: 'OPTIONS', url: '/api/wiki/allow' });
+    expect(response.statusCode).toBe(405);
+    expect(response.headers['access-control-allow-origin']).toBeUndefined();
+  });
 });
 
 describe('/api/uhs/file', () => {
@@ -136,6 +168,49 @@ describe('/api/wiki/:host', () => {
       url: '/api/wiki/evil.example.com?action=query',
     });
     expect(response.statusCode).toBe(400);
+  });
+
+  it('starts with an empty allowlist and says so', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/wiki/allow' });
+    expect(response.statusCode).toBe(200);
+    expect(response.json().wikis).toEqual([]);
+  });
+
+  it('refuses to allowlist anything outside the two platforms', async () => {
+    // Runtime additions widen the SSRF boundary, so this is the check that
+    // keeps them from widening it to anywhere at all.
+    for (const host of ['169.254.169.254', 'internal.corp', 'evil.test']) {
+      const response = await app.inject({
+        method: 'POST',
+        url: '/api/wiki/allow',
+        payload: { host },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.json().error).toMatch(/Fandom and wiki\.gg/);
+    }
+    const listed = await app.inject({ method: 'GET', url: '/api/wiki/allow' });
+    expect(listed.json().wikis).toEqual([]);
+  });
+
+  it('needs a host to add one', async () => {
+    const response = await app.inject({ method: 'POST', url: '/api/wiki/allow', payload: {} });
+    expect(response.statusCode).toBe(400);
+  });
+
+  it('will not discover on a query too short to mean anything', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/wiki/discover?q=a' });
+    expect(response.statusCode).toBe(400);
+  });
+
+  // The allowlist is the only thing standing between "read a wiki" and "read
+  // anything", so it guards the metadata route too — not just the fetch.
+  it('rejects an off-list host on the site route as well', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/wiki/blue-prince.fandom.com.evil.example.com/site',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().hint).toMatch(/WIKI_ALLOWLIST/);
   });
 });
 
@@ -221,7 +296,16 @@ describe('/api/catalog/sources', () => {
       'ifarchive',
       'strategywiki',
       'ifdb',
+      'fandom',
+      'wikigg',
     ]);
+    // The wiki platforms are off by default: they do nothing until an operator
+    // puts a host in WIKI_ALLOWLIST.
+    for (const kind of ['fandom', 'wikigg']) {
+      const source = sources.find((s) => s.kind === kind)!;
+      expect(source.enabledByDefault).toBe(false);
+      expect(source.note).toMatch(/WIKI_ALLOWLIST/);
+    }
     const strategywiki = sources.find((source) => source.kind === 'strategywiki')!;
     expect(strategywiki.enabledByDefault).toBe(false);
     expect(strategywiki.note).toMatch(/Cloudflare/);
@@ -245,5 +329,21 @@ describe('/api/catalog/:source/list', () => {
   it('refuses a source with no browse listing', async () => {
     const response = await app.inject({ method: 'GET', url: '/api/catalog/gamefaqs/list' });
     expect(response.statusCode).toBe(400);
+  });
+
+  // `:source` names a platform of hundreds of wikis, so it cannot say which one.
+  it('needs a host to browse a wiki platform', async () => {
+    const response = await app.inject({ method: 'GET', url: '/api/catalog/fandom/list' });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().error).toMatch(/host is required/);
+  });
+
+  it('refuses to browse a wiki that is not allowlisted', async () => {
+    const response = await app.inject({
+      method: 'GET',
+      url: '/api/catalog/wikigg/list?host=anything.wiki.gg',
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json().hint).toMatch(/WIKI_ALLOWLIST/);
   });
 });

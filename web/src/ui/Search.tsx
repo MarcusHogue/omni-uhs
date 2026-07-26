@@ -15,6 +15,8 @@ import { downloadEntry } from '../storage/download';
 import { getSetting } from '../storage/db';
 import { ErrorNote, SOURCE_LABELS, SourceBadge, Spinner, Warnings } from './bits';
 import { useDebounced, useLatest, useLibrary, useOfflineRefs, useOnline } from './hooks';
+import { refUrl, wikiPageUrl } from './refs';
+import { WikiFinder } from './WikiFinder';
 
 /**
  * Chips to show before `/api/catalog/sources` answers — and if it never does.
@@ -36,6 +38,15 @@ const DEBOUNCE_MS = 400;
 const defaultsOf = (sources: SourceInfo[]): SourceKind[] =>
   sources.filter((source) => source.enabledByDefault).map((source) => source.kind);
 
+/**
+ * A wiki platform with nothing in `WIKI_ALLOWLIST` can only ever return
+ * nothing — it is hundreds of sites and the server has been given none of them.
+ * The chip stays visible so the feature is discoverable, but switching it on
+ * would be a lie, so it is disabled and says why.
+ */
+const unconfigured = (source: SourceInfo): boolean =>
+  (source.kind === 'fandom' || source.kind === 'wikigg') && (source.hosts?.length ?? 0) === 0;
+
 export function Search(): JSX.Element {
   const [query, setQuery] = useState('');
   const [sources, setSources] = useState<SourceInfo[]>(FALLBACK_SOURCES);
@@ -55,6 +66,12 @@ export function Search(): JSX.Element {
    * for, so hand them one.
    */
   const [challengeLink, setChallengeLink] = useState<string | null>(null);
+  /**
+   * Bumped when a wiki is added, to re-run both the source list and the search.
+   * Adding one is only useful if the results you were already looking at pick
+   * it up without being retyped.
+   */
+  const [wikisAdded, setWikisAdded] = useState(0);
 
   const debounced = useDebounced(query, DEBOUNCE_MS);
   const runLatest = useLatest();
@@ -71,6 +88,8 @@ export function Search(): JSX.Element {
   // Ask the server which sources it has and which it considers default. A
   // failure here is not worth surfacing: the fallback list is already correct
   // for a stock deployment, and a real outage will show up on the search itself.
+  // Re-runs after a wiki is added, which changes both the hosts and whether the
+  // platform chips are usable at all.
   useEffect(() => {
     let cancelled = false;
     api
@@ -84,7 +103,7 @@ export function Search(): JSX.Element {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [wikisAdded]);
 
   useEffect(() => {
     const trimmed = debounced.trim();
@@ -137,7 +156,7 @@ export function Search(): JSX.Element {
         setSearching(false);
       }
     });
-  }, [debounced, selected, runLatest]);
+  }, [debounced, selected, wikisAdded, runLatest]);
 
   return (
     <>
@@ -154,13 +173,18 @@ export function Search(): JSX.Element {
       <div className="chips" role="group" aria-label="Filter by source">
         {sources.map((source) => {
           const active = selected.includes(source.kind);
+          const disabled = unconfigured(source);
+          const title = disabled
+            ? `No ${SOURCE_LABELS[source.kind]} wikis have been added yet. Search for a game and use “Look for a wiki”.`
+            : source.note;
           return (
             <button
               key={source.kind}
               type="button"
               className={active ? 'chip chip-on' : 'chip'}
               aria-pressed={active}
-              {...(source.note ? { title: source.note } : {})}
+              disabled={disabled}
+              {...(title ? { title } : {})}
               onClick={() => {
                 touchedChips.current = true;
                 setSelected((current) =>
@@ -229,6 +253,16 @@ export function Search(): JSX.Element {
         groups.length === 0 && (
           <p className="muted">Nothing found for “{debounced.trim()}”.</p>
         )}
+
+      {/* A game with no hint file may still have a wiki. Offered after the
+          results rather than instead of them: this costs real requests to
+          Fandom and wiki.gg, so it happens when asked and not before. */}
+      {!searching && debounced.trim().length >= MIN_QUERY && (
+        <WikiFinder
+          query={debounced.trim()}
+          onAdded={() => setWikisAdded((n) => n + 1)}
+        />
+      )}
     </>
   );
 }
@@ -278,6 +312,10 @@ function describe(entry: CatalogEntry): string {
     parts.push(entry.ref.split('/').pop() ?? entry.ref);
   } else if (entry.sourceKind === 'strategywiki') {
     parts.push(entry.ref);
+  } else if (entry.host) {
+    // The group heading is the game; what distinguishes rows is which wiki.
+    parts.push(entry.host.replace(/\.(fandom\.com|wiki\.gg)$/, ''));
+    parts.push(entry.ref);
   } else {
     parts.push(entry.title);
   }
@@ -297,20 +335,8 @@ function describe(entry: CatalogEntry): string {
 function externalUrl(entry: CatalogEntry): string | null {
   if (entry.sourceKind === 'ifdb') return `https://ifdb.org/viewgame?id=${entry.ref}`;
   if (entry.sourceKind === 'strategywiki') return strategyWikiPageUrl(entry.ref);
+  if (entry.host) return wikiPageUrl(entry.host, entry.ref);
   return null;
-}
-
-/** The URL form a stored document records, so downloads can be matched. */
-function refUrl(entry: CatalogEntry): string {
-  if (entry.sourceKind === 'ifarchive') {
-    return `https://ifarchive.org/${entry.ref.replace(/^\/+/, '')}`;
-  }
-  if (entry.sourceKind === 'strategywiki') {
-    return `https://strategywiki.org/wiki/${encodeURIComponent(
-      entry.ref.split('/')[0]!.replace(/ /g, '_'),
-    )}`;
-  }
-  return entry.ref;
 }
 
 function ResultRow({

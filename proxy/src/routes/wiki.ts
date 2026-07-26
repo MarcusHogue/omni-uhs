@@ -17,6 +17,16 @@ import { config } from '../config.js';
 import { getCache } from '../cache/index.js';
 import { IFDB_BASE } from '../catalog/ifdb.js';
 import { STRATEGYWIKI, apiUrl, fetchRightsInfo } from '../catalog/mediawiki.js';
+import { discoverWikis } from '../catalog/discover.js';
+import {
+  allowWiki,
+  allowedWikiHosts,
+  describeWiki,
+  forgetWiki,
+  isPinned,
+  isWikiAllowed,
+  targetFor,
+} from '../catalog/wikis.js';
 import { assertAllowed } from '../upstream/allowlist.js';
 
 /** Only read actions are proxied; nothing may write to a wiki. */
@@ -60,25 +70,113 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
     return reply.send(info);
   });
 
-  app.get('/api/wiki/:host', async (request, reply) => {
+  /**
+   * Look for a wiki about a game.
+   *
+   * Deliberately a GET with no side effects: this only *offers* hosts. Nothing
+   * becomes reachable until `POST /api/wiki/allow` says so.
+   */
+  app.get('/api/wiki/discover', async (request, reply) => {
+    const { q } = request.query as { q?: string };
+    const query = (q ?? '').trim();
+    if (query.length < 2) {
+      return reply.code(400).send({ error: 'q must be at least 2 characters' });
+    }
+    return reply
+      .header('cache-control', 'no-store')
+      .send(await discoverWikis(getCache(), query));
+  });
+
+  /** The wikis this deployment may read, and where each came from. */
+  app.get('/api/wiki/allow', async (_request, reply) => {
+    const cache = getCache();
+    const wikis = await Promise.all(
+      allowedWikiHosts(cache).map(async (host) => {
+        try {
+          const site = await describeWiki(cache, host);
+          return { ...site, pinned: isPinned(host) };
+        } catch (error) {
+          // An allowlisted wiki that will not answer is still allowlisted, and
+          // saying so beats dropping it silently from the list.
+          return { host, pinned: isPinned(host), error: (error as Error).message };
+        }
+      }),
+    );
+    return reply.header('cache-control', 'no-store').send({ wikis });
+  });
+
+  /**
+   * Add a wiki, live.
+   *
+   * The allowlist is the SSRF boundary, so this is bounded rather than open:
+   * `allowWiki` accepts `*.fandom.com` and `*.wiki.gg` and nothing else, and it
+   * verifies the host is a real MediaWiki before recording it. Every other
+   * upstream still has to be named in `UPSTREAM_ALLOWLIST` at boot.
+   */
+  app.post('/api/wiki/allow', async (request, reply) => {
+    const { host } = (request.body ?? {}) as { host?: string };
+    if (!host) return reply.code(400).send({ error: 'host is required' });
+    try {
+      const site = await allowWiki(getCache(), host);
+      return reply.send({ ...site, pinned: isPinned(site.host) });
+    } catch (error) {
+      const status = (error as { statusCode?: number }).statusCode ?? 502;
+      // A 400 is our own refusal and already says why; a 404 means the guess
+      // was simply wrong, which is not an error worth dressing up.
+      if (status === 400) return reply.code(400).send({ error: (error as Error).message });
+      if (status === 404) return reply.code(400).send({ error: `no wiki answered at ${host}` });
+      return reply
+        .code(status)
+        .send({ error: `could not reach ${host}: ${(error as Error).message}` });
+    }
+  });
+
+  app.delete('/api/wiki/allow/:host', async (request, reply) => {
     const { host } = request.params as { host: string };
-    if (!config.wikiAllowlist.includes(host.toLowerCase())) {
+    if (!forgetWiki(getCache(), host)) {
+      return reply.code(400).send({
+        error: `${host} comes from WIKI_ALLOWLIST and cannot be removed from the app`,
+        hint: 'edit WIKI_ALLOWLIST and restart to change it',
+      });
+    }
+    return reply.send({ host: host.toLowerCase(), removed: true });
+  });
+
+  /**
+   * What we know about an allowlisted wiki: its name, its licence, and whether
+   * that licence makes it personal-use-only. The generic replacement for
+   * `/api/strategywiki/license`, which only ever worked for one site.
+   */
+  app.get('/api/wiki/:host/site', async (request, reply) => {
+    const { host } = request.params as { host: string };
+    if (!isWikiAllowed(getCache(), host)) {
       return reply.code(400).send({
         error: `wiki host not allowed: ${host}`,
-        hint: 'add it to WIKI_ALLOWLIST',
+        hint: 'add it in Settings, or to WIKI_ALLOWLIST',
+      });
+    }
+    return reply.send(await describeWiki(getCache(), host.toLowerCase()));
+  });
+
+  app.get('/api/wiki/:host', async (request, reply) => {
+    const { host } = request.params as { host: string };
+    if (!isWikiAllowed(getCache(), host)) {
+      return reply.code(400).send({
+        error: `wiki host not allowed: ${host}`,
+        hint: 'add it in Settings, or to WIKI_ALLOWLIST',
       });
     }
     const params = validateParams(request.query as Record<string, unknown>);
-    // Fandom serves api.php at the root; wiki.gg and MediaWiki proper use /w/.
-    const api = host.endsWith('.fandom.com')
-      ? `https://${host}/api.php`
-      : `https://${host}/w/api.php`;
 
+    // The api.php path is read from the wiki itself rather than guessed. The
+    // guess used to be "Fandom is /api.php, everyone else /w/api.php", which
+    // 404s on every wiki.gg wiki and on Fandom's language wikis.
     const cache = getCache();
+    const target = await targetFor(cache, host.toLowerCase());
     const entry = await cache.fetch({
-      url: apiUrl(api, params),
+      url: apiUrl(target.api, params),
       ttl: config.ttl.wiki,
-      allowlist: [host.toLowerCase()],
+      allowlist: target.allowlist ?? [host.toLowerCase()],
       accept: 'application/json',
     });
     return reply
