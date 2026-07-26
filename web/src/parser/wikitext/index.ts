@@ -13,6 +13,8 @@
 import type {
   HintDocument,
   HintGroupNode,
+  HintNode,
+  ImageNode,
   Inline,
   Node,
   ParseResult,
@@ -23,6 +25,8 @@ import type {
 import { inlineText } from '../ast';
 import { stableId } from '../id';
 import { guidanceRank, isNeverHint, looksLikeGuidance, scoreSection } from './guidance';
+import type { ImageRef } from './images';
+import { extractGalleries, findFileLinks, stripFileLinks } from './images';
 
 export interface WikiPageInput {
   title: string;
@@ -69,6 +73,14 @@ export interface WikiWalkthroughOptions {
    * StrategyWiki — which is already written as a walkthrough — is untouched.
    */
   rank?: boolean;
+  /**
+   * Record the pictures each hint refers to, for the storage layer to fetch.
+   *
+   * Off by default. StrategyWiki's fallback path reads the wiki straight from
+   * the browser and cannot fetch image bytes at all, so turning this on there
+   * would produce references that never resolve.
+   */
+  images?: boolean;
 }
 
 /** Templates whose content is a spoiler and must start hidden. */
@@ -82,11 +94,18 @@ const SPOILER_TEMPLATES = /^(spoiler|hidden|collapse|mbox spoiler)/i;
  * text through turned a filing instruction into a sentence, and on a page whose
  * only content was categories, into a hint reading "Category:Creatures".
  */
-const FILING_LINK = /\[\[(?:Category|File|Image|Media|Template|Special):[^\]]*\]\]/gi;
+const FILING_LINK = /\[\[(?:Category|Media|Template|Special):[^\]]*\]\]/gi;
 
-/** Everything that vanishes: markers, filing, and comments. */
+/**
+ * Everything that vanishes: markers, filing, and comments.
+ *
+ * File links go through `stripFileLinks`, not `FILING_LINK`. A caption may
+ * contain a link of its own — `[[File:Door.png|thumb|Solution to the
+ * [[Antechamber]] door]]` — and the flat `[^\]]*` pattern stops at the first
+ * `]]` inside it, leaving `door]]` in the prose.
+ */
 const removed = (text: string): string =>
-  text
+  stripFileLinks(text)
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<ref[^>]*\/>/gi, '')
     .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
@@ -332,6 +351,8 @@ interface Block {
   /** Display content, with in-document links preserved as links. */
   content: Inline[];
   spoiler: boolean;
+  /** Pictures referenced alongside this block. Empty unless asked for. */
+  images: ImageRef[];
 }
 
 /** Resolves a page title to the id of its subject, when it is in this download. */
@@ -343,15 +364,30 @@ const joinBlocks = (blocks: Block[]): Inline[] =>
     index === 0 ? block.content : [{ kind: 'run' as const, text: '\n' }, ...block.content],
   );
 
-/** Split a section's wikitext into displayable blocks. */
-function toBlocks(body: string, resolve?: Resolver): Block[] {
+/**
+ * Split a section's wikitext into displayable blocks.
+ *
+ * `<gallery>` blocks come out first and unconditionally. Nothing else in the
+ * pipeline recognised them — `FILING_LINK` only matches bracketed `[[File:…]]`,
+ * and `cleaned` strips a fixed list of inline HTML tags that does not include
+ * `gallery` — so a gallery survived into a hint as prose reading
+ * `<gallery widths="200px"> File:Conceptart 01.jpg File:Conceptart 02.jpg`.
+ */
+function toBlocks(body: string, resolve?: Resolver, withImages = false): Block[] {
+  const { text, images: fromGalleries } = extractGalleries(body);
   const blocks: Block[] = [];
   let paragraph: string[] = [];
   let paragraphSpoiler = false;
+  /** Pictures seen since the last block, waiting for something to belong to. */
+  let pending: ImageRef[] = [];
 
   const push = (raw: string, spoiler: boolean): void => {
     const content = toInline(raw, resolve);
-    if (content.length > 0) blocks.push({ content, spoiler });
+    const images = pending;
+    pending = [];
+    // A picture with no prose is still a block: on Blue Prince a section is
+    // often nothing but the scan that answers it.
+    if (content.length > 0 || images.length > 0) blocks.push({ content, spoiler, images });
   };
 
   const flush = (): void => {
@@ -360,8 +396,9 @@ function toBlocks(body: string, resolve?: Resolver): Block[] {
     paragraphSpoiler = false;
   };
 
-  for (const rawLine of body.split('\n')) {
+  for (const rawLine of text.split('\n')) {
     const line = rawLine.trimEnd();
+    if (withImages) pending.push(...findFileLinks(line));
     if (line.trim() === '') {
       flush();
       continue;
@@ -379,6 +416,14 @@ function toBlocks(body: string, resolve?: Resolver): Block[] {
     paragraphSpoiler ||= spoiler;
   }
   flush();
+
+  if (withImages && fromGalleries.length > 0) {
+    // A gallery's position is lost when it is blanked out, so it goes with the
+    // last thing the section said — which for a gallery is usually where it was.
+    const last = blocks[blocks.length - 1];
+    if (last) last.images.push(...fromGalleries);
+    else blocks.push({ content: [], spoiler: false, images: fromGalleries });
+  }
   return blocks;
 }
 
@@ -408,6 +453,36 @@ export function splitSections(wikitext: string): Section[] {
   return sections.filter((s) => s.title !== '' || s.body.trim() !== '');
 }
 
+/**
+ * A picture the page refers to, with no bytes yet.
+ *
+ * `data` stays empty until `storage/images.ts` has fetched something, and
+ * `blobKey` is set at the same time. A renderer must therefore check
+ * `data.length` rather than assuming bytes are there — the alternative,
+ * making `data` optional, would ripple through the UHS path where it never is.
+ */
+function toImageNode(ref: ImageRef, id: string, wikiBase: string): ImageNode {
+  const underscored = ref.file.replace(/ /g, '_');
+  return {
+    id,
+    type: 'image',
+    label: ref.caption ? stripMarkup(ref.caption) : ref.file.replace(/\.\w+$/, ''),
+    data: new Uint8Array(0),
+    mime: '',
+    source: {
+      file: ref.file,
+      url: `${wikiBase}File:${encodeURIComponent(underscored)}`,
+      omitted: 'unavailable',
+    },
+  };
+}
+
+/** Turn a block's picture references into nodes hanging off one hint. */
+function imagesFor(block: Block, hintId: string, wikiBase: string): ImageNode[] | undefined {
+  if (block.images.length === 0) return undefined;
+  return block.images.map((ref, n) => toImageNode(ref, `${hintId}:i${n}`, wikiBase));
+}
+
 /** Build the subject tree for one page. */
 function pageToSubject(
   page: WikiPageInput,
@@ -418,6 +493,10 @@ function pageToSubject(
   rank = false,
   /** Collects each group's rank, for the index built at the document level. */
   rankOf: Map<string, number> = new Map(),
+  /** Record picture references. Off for StrategyWiki. */
+  images = false,
+  /** e.g. https://blue-prince.fandom.com/wiki/ — for the "view on the wiki" link. */
+  wikiBase = '',
 ): SubjectNode {
   const label = page.title.includes('/') ? page.title.slice(page.title.indexOf('/') + 1) : page.title;
   const root: SubjectNode = {
@@ -436,7 +515,7 @@ function pageToSubject(
     // they are rows, and rows are what you scroll past.
     if (rank && isNeverHint(section.title)) continue;
 
-    const blocks = toBlocks(section.body, resolve);
+    const blocks = toBlocks(section.body, resolve, images);
 
     let target = root;
     if (section.title) {
@@ -465,11 +544,13 @@ function pageToSubject(
           id: `${target.id}.p${target.children.length}`,
           type: 'hints',
           label: section.title || root.label,
-          hints: plain.map((block, index) => ({
-            id: `${target.id}.p${target.children.length}:h${index}`,
-            type: 'hint' as const,
-            content: block.content,
-          })),
+          hints: plain.map((block, index) => {
+            const id = `${target.id}.p${target.children.length}:h${index}`;
+            const hint: HintNode = { id, type: 'hint', content: block.content };
+            const pictures = imagesFor(block, id, wikiBase);
+            if (pictures) hint.images = pictures;
+            return hint;
+          }),
         };
         if (rank) {
           const signals = scoreSection(
@@ -503,11 +584,13 @@ function pageToSubject(
         id: `${target.id}.s${target.children.length}`,
         type: 'hints',
         label: section.title ? `${section.title} (spoilers)` : 'Spoilers',
-        hints: spoilers.map((block, index) => ({
-          id: `${target.id}.s${target.children.length}:h${index}`,
-          type: 'hint' as const,
-          content: block.content,
-        })),
+        hints: spoilers.map((block, index) => {
+          const id = `${target.id}.s${target.children.length}:h${index}`;
+          const hint: HintNode = { id, type: 'hint', content: block.content };
+          const pictures = imagesFor(block, id, wikiBase);
+          if (pictures) hint.images = pictures;
+          return hint;
+        }),
       };
       target.children.push(group);
     }
@@ -664,9 +747,19 @@ export function parseWikiWalkthrough(
   const resolve = (title: string): string | undefined => pageIds.get(title);
   const rank = options.rank ?? false;
   const rankOf = new Map<string, number>();
+  const images = options.images ?? false;
 
   kept.forEach((page, index) => {
-    const subject = pageToSubject(page, `p:${index}`, reveal, resolve, rank, rankOf);
+    const subject = pageToSubject(
+      page,
+      `p:${index}`,
+      reveal,
+      resolve,
+      rank,
+      rankOf,
+      images,
+      options.baseUrl,
+    );
     if (subject.children.length > 0) children.push(subject);
     else if (rank) {
       // Everything on it was a gallery, a table, or a references list. Worth
