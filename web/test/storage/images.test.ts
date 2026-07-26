@@ -42,6 +42,16 @@ describe('chooseImage', () => {
     expect(chooseImage(info({}), POLICY, 0)).toMatchObject({ fetch: 'thumb', width: 640 });
   });
 
+  it('reports what it expects to cost, so the caller can reserve it', () => {
+    // Exact for an original; an area-ratio guess for a thumbnail, because
+    // MediaWiki never reports a thumbnail's byte size.
+    const original = chooseImage(info({ width: 500, size: 91_000 }), POLICY, 0);
+    expect(original).toMatchObject({ fetch: 'original', estimate: 91_000 });
+
+    const thumb = chooseImage(info({ width: 1280, size: 400_000 }), POLICY, 0);
+    expect(thumb).toMatchObject({ fetch: 'thumb', estimate: 100_000 });
+  });
+
   it('takes the original when it is already narrow enough', () => {
     // The measured trap: MediaWiki re-encodes to make a thumbnail, and for a
     // small source that came back at 175 KB against a 91 KB original. It never
@@ -132,6 +142,37 @@ describe('image storage', () => {
   it('stores pictures with their document and reads them back by key', async () => {
     await putDocument(document('blue'), undefined, [picture('blue', 'Door.png')]);
     expect(await getImage('blue|Door.png')).toMatchObject({ mime: 'image/webp' });
+    expect(await listImages('blue')).toHaveLength(1);
+  });
+
+  it('replaces the picture set on a re-download rather than adding to it', async () => {
+    await putDocument(document('blue'), undefined, [
+      picture('blue', 'One.png'),
+      picture('blue', 'Two.png'),
+    ]);
+    await putDocument(document('blue'), undefined, [picture('blue', 'Three.png')]);
+
+    expect((await listImages('blue')).map((image) => image.key)).toEqual(['blue|Three.png']);
+  });
+
+  it('leaves nothing behind when a re-download turns images off', async () => {
+    // The leak this guards is a licence one, not a disk one. A wiki's document
+    // id is stable, so a re-download overwrites it; with images off the
+    // replacement is no longer personal-use-only, and a shareable export would
+    // then find the previous download's rows through `listImages` and put
+    // unlicensed pictures in an archive meant to carry none.
+    await putDocument(document('blue'), undefined, [picture('blue', 'One.png')]);
+    await putDocument({ ...document('blue'), personalUseOnly: false }, undefined, []);
+
+    expect(await listImages('blue')).toEqual([]);
+  });
+
+  it('leaves the pictures alone when it is not asked about them', async () => {
+    // Omitting the argument means "no opinion" — the UHS and IF Archive paths
+    // pass nothing and must not wipe a wiki game's pictures by association.
+    await putDocument(document('blue'), undefined, [picture('blue', 'One.png')]);
+    await putDocument(document('blue'));
+
     expect(await listImages('blue')).toHaveLength(1);
   });
 

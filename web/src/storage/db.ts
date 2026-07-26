@@ -129,6 +129,21 @@ export function resetDb(): void {
   dbPromise = null;
 }
 
+/**
+ * Write a document, and optionally its bytes and its pictures.
+ *
+ * Passing `images` **replaces** the document's picture set, including with an
+ * empty array; omitting it leaves whatever is stored alone. The distinction
+ * matters more than it looks:
+ *
+ * A wiki's document id is stable, so re-downloading one overwrites it. Upserting
+ * the new pictures without clearing the old ones left the previous download's
+ * rows behind — and if the re-download had images turned off, the replacement
+ * document is no longer `personalUseOnly`, so a shareable export would then find
+ * those orphans through `listImages` and put unlicensed images in an archive
+ * meant to carry none. Everything in one transaction, so a failed write cannot
+ * leave a title holding a previous attempt's pictures either.
+ */
 export async function putDocument(
   stored: StoredDocument,
   blob?: StoredBlob,
@@ -138,9 +153,13 @@ export async function putDocument(
   const tx = db.transaction(['documents', 'blobs', 'images'], 'readwrite');
   await tx.objectStore('documents').put(stored);
   if (blob) await tx.objectStore('blobs').put(blob);
-  // One transaction with the document, so a half-written download cannot leave
-  // a title whose pictures are a previous attempt's.
-  for (const image of images ?? []) await tx.objectStore('images').put(image);
+  if (images) {
+    const existing = tx.objectStore('images').index('by-document');
+    for (let cursor = await existing.openCursor(stored.id); cursor; cursor = await cursor.continue()) {
+      await cursor.delete();
+    }
+    for (const image of images) await tx.objectStore('images').put(image);
+  }
   await tx.done;
 }
 

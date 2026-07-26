@@ -1,4 +1,13 @@
 /**
+ * @vitest-environment node
+ *
+ * Node, not the jsdom that `test/ui/**` otherwise implies: this exercises
+ * `buildIndex` and `searchLabels`, which are plain data. jsdom is not a
+ * dependency of this project, so asking for it fails the run outright — with
+ * every test still reporting green, which is how it went unnoticed.
+ */
+
+/**
  * The in-document find.
  *
  * Its contract is that it never surfaces an answer: it searches section and

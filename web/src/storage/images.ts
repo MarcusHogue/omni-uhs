@@ -48,7 +48,18 @@ export interface ImagePolicy {
 }
 
 export type ImageChoice =
-  | { fetch: 'thumb' | 'original'; url: string; width: number; height: number }
+  | {
+      fetch: 'thumb' | 'original';
+      url: string;
+      width: number;
+      height: number;
+      /**
+       * What this is expected to cost, for the caller to reserve before
+       * fetching. Exact for an original; for a thumbnail it is an area-ratio
+       * estimate, because MediaWiki does not report a thumbnail's byte size.
+       */
+      estimate: number;
+    }
   | { fetch: 'skip'; reason: 'decorative' | 'budget' | 'unavailable' };
 
 /**
@@ -75,25 +86,39 @@ export function chooseImage(info: ImageInfo, policy: ImagePolicy, spent: number)
   // that until the bytes have already been fetched.
   if (info.width > 0 && info.width <= policy.maxWidth) {
     if (spent + info.size > policy.budgetBytes) return { fetch: 'skip', reason: 'budget' };
-    return { fetch: 'original', url: info.url, width: info.width, height: info.height };
+    return {
+      fetch: 'original',
+      url: info.url,
+      width: info.width,
+      height: info.height,
+      estimate: info.size,
+    };
   }
 
   if (!info.thumbUrl) {
     // Wider than the target but no thumbnail offered — SVG and some GIFs. The
     // original is all there is, so it has to fit the budget on its own terms.
     if (spent + info.size > policy.budgetBytes) return { fetch: 'skip', reason: 'budget' };
-    return { fetch: 'original', url: info.url, width: info.width, height: info.height };
+    return {
+      fetch: 'original',
+      url: info.url,
+      width: info.width,
+      height: info.height,
+      estimate: info.size,
+    };
   }
 
   // A thumbnail's byte size is not reported, so estimate from the area ratio.
   // Only used against the budget, never to choose between two sizes.
   const ratio = info.width > 0 ? (policy.maxWidth / info.width) ** 2 : 1;
-  if (spent + info.size * ratio > policy.budgetBytes) return { fetch: 'skip', reason: 'budget' };
+  const estimate = info.size * ratio;
+  if (spent + estimate > policy.budgetBytes) return { fetch: 'skip', reason: 'budget' };
   return {
     fetch: 'thumb',
     url: info.thumbUrl,
     width: info.thumbWidth ?? policy.maxWidth,
     height: info.thumbHeight ?? 0,
+    estimate,
   };
 }
 
@@ -220,10 +245,28 @@ export async function fetchImages(
 
   const info = await resolveImages(host, [...byFile.keys()], policy.maxWidth, options.signal);
 
+  /**
+   * Bytes committed so far — reserved before each fetch, not counted after it.
+   *
+   * With four workers in flight, counting afterwards let every one of them test
+   * the same pre-fetch total and pass: four 4 MB originals against a 10 MB
+   * budget all cleared the check and all 16 MB were kept. There is no lock to
+   * take here and none is needed, because JavaScript will not interleave
+   * anything between reading `spent` and writing it back — as long as no `await`
+   * sits between the two, which is why the reservation happens before the
+   * request rather than around it.
+   */
   let spent = 0;
   let done = 0;
   const files = [...byFile.keys()];
   let next = 0;
+
+  const skip = (file: string, targets: ImageNode[], reason: 'decorative' | 'budget' | 'unavailable'): void => {
+    for (const node of targets) if (node.source) node.source.omitted = reason;
+    if (reason === 'budget') {
+      warnings.push(`${file}: skipped, the image budget for this game is full`);
+    }
+  };
 
   const worker = async (): Promise<void> => {
     for (let i = next++; i < files.length; i = next++) {
@@ -235,19 +278,29 @@ export async function fetchImages(
         : { fetch: 'skip', reason: 'unavailable' };
 
       if (choice.fetch === 'skip') {
-        for (const node of targets) if (node.source) node.source.omitted = choice.reason;
-        if (choice.reason === 'budget') {
-          warnings.push(`${file}: skipped, the image budget for this game is full`);
-        }
+        skip(file, targets, choice.reason);
         options.onProgress?.(++done, files.length);
         continue;
       }
 
+      // Reserved here, synchronously, so no other worker can spend it too.
+      const reserved = choice.estimate;
+      spent += reserved;
+
       try {
         const { bytes, mime } = await api.wikiImage(host, choice.url, options.signal);
-        // Claim the budget from what was actually transferred, not from the
-        // estimate: the estimate is an area ratio and is routinely wrong.
-        spent += bytes.length;
+        // A thumbnail's real size is only known now, and the estimate is an
+        // area ratio that is routinely wrong in both directions. If the truth
+        // does not fit, the bytes are dropped rather than kept — a budget that
+        // is only exceeded by whatever the estimate got wrong is not a budget.
+        if (spent - reserved + bytes.length > policy.budgetBytes) {
+          spent -= reserved;
+          skip(file, targets, 'budget');
+          options.onProgress?.(++done, files.length);
+          continue;
+        }
+        spent += bytes.length - reserved;
+
         const key = imageKey(documentId, file);
         images.push({
           key,
@@ -267,6 +320,9 @@ export async function fetchImages(
           }
         }
       } catch (error) {
+        // Release the reservation: a failed fetch cost nothing, and holding it
+        // would shrink the budget for every picture after it.
+        spent -= reserved;
         if ((error as Error).name === 'AbortError') throw error;
         for (const node of targets) if (node.source) node.source.omitted = 'unavailable';
         warnings.push(`${file}: ${(error as Error).message}`);

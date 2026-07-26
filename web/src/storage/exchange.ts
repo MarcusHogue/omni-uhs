@@ -129,17 +129,23 @@ function writePreferences(preferences: Record<string, string>): number {
 }
 
 /**
- * A zip-safe name for one picture.
+ * A zip-safe, unique name for one picture.
  *
  * An image key is `<docId>|<file>` and a wiki file title can hold anything a
- * filename cannot — slashes, colons, quotes. The index alongside maps the safe
- * name back to the real key, so nothing depends on the encoding being readable.
+ * filename cannot — slashes, colons, quotes — so it is escaped and truncated.
+ * Truncation alone is not enough: two keys sharing the first 180 escaped
+ * characters would produce the same name, the later write would overwrite the
+ * earlier bytes, and both manifest entries would point at it. Restoring would
+ * then hand one picture's contents to two keys, silently. MediaWiki permits
+ * titles long enough for that, so the position prefix carries the uniqueness
+ * and the escaped tail is only there to keep the archive readable.
  */
-function slugForImage(key: string): string {
-  return [...key]
+function slugForImage(key: string, position: number): string {
+  const escaped = [...key]
     .map((c) => (/[a-z0-9._-]/i.test(c) ? c : `_${c.codePointAt(0)!.toString(16)}_`))
     .join('')
     .slice(0, 180);
+  return `${position}-${escaped}`;
 }
 
 const BACKUP_NOTICE =
@@ -197,18 +203,18 @@ export async function exportLibrary(options: ExportOptions = {}): Promise<Export
       images += pictures.length;
       files[`images/${document.id}/index.json`] = strToU8(
         JSON.stringify(
-          pictures.map((image) => ({
+          pictures.map((image, position) => ({
             key: image.key,
             mime: image.mime,
             width: image.width,
             height: image.height,
-            file: `${slugForImage(image.key)}.bin`,
+            file: `${slugForImage(image.key, position)}.bin`,
           })),
         ),
       );
-      for (const image of pictures) {
-        files[`images/${document.id}/${slugForImage(image.key)}.bin`] = image.bytes;
-      }
+      pictures.forEach((image, position) => {
+        files[`images/${document.id}/${slugForImage(image.key, position)}.bin`] = image.bytes;
+      });
     }
   }
 
