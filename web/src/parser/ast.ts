@@ -108,6 +108,16 @@ export interface TextNode extends NodeBase {
   type: 'text';
   label: string;
   content: Inline[];
+  /**
+   * Pictures the section referred to.
+   *
+   * Mirrors `HintNode.images`, and for the same reason: a StrategyWiki page
+   * reads as written, so its prose becomes a `text` node rather than a hint —
+   * and without this the pictures on it were parsed, then quietly dropped on
+   * the floor. Nothing hides them behind a reveal here, because nothing on such
+   * a page is hidden in the first place.
+   */
+  images?: ImageNode[];
 }
 
 export interface Hotspot {
@@ -202,6 +212,8 @@ export function* walk(node: Node): Generator<Node> {
       for (const nested of hint.nested ?? []) yield* walk(nested);
       for (const image of hint.images ?? []) yield* walk(image);
     }
+  } else if (node.type === 'text') {
+    for (const image of node.images ?? []) yield* walk(image);
   } else if (node.type === 'image') {
     for (const hotspot of node.hotspots ?? []) yield* walk(hotspot.target);
   }

@@ -21,7 +21,7 @@
  * `chooseImage` is pure and holds all of that; everything else here is plumbing.
  */
 
-import { api } from '../api/client';
+import type { WikiTransport } from '../api/client';
 import type { ImageNode } from '../parser/ast';
 import { imageKey, type StoredImage } from './db';
 
@@ -152,7 +152,7 @@ interface ImageInfoResponse {
  * reference to a deleted picture is not an error worth stopping a download for.
  */
 export async function resolveImages(
-  host: string,
+  wiki: WikiTransport,
   files: string[],
   maxWidth: number,
   signal?: AbortSignal,
@@ -160,8 +160,7 @@ export async function resolveImages(
   const found = new Map<string, ImageInfo>();
   for (let i = 0; i < files.length; i += INFO_BATCH) {
     const batch = files.slice(i, i + INFO_BATCH);
-    const response = await api.wiki<ImageInfoResponse>(
-      host,
+    const response = await wiki.query<ImageInfoResponse>(
       {
         action: 'query',
         prop: 'imageinfo',
@@ -219,7 +218,7 @@ export interface ImageFetchResult {
  * dead end and a next step.
  */
 export async function fetchImages(
-  host: string,
+  wiki: WikiTransport,
   documentId: string,
   nodes: ImageNode[],
   policy: ImagePolicy,
@@ -243,7 +242,7 @@ export async function fetchImages(
     else byFile.set(file, [node]);
   }
 
-  const info = await resolveImages(host, [...byFile.keys()], policy.maxWidth, options.signal);
+  const info = await resolveImages(wiki, [...byFile.keys()], policy.maxWidth, options.signal);
 
   /**
    * Bytes committed so far — reserved before each fetch, not counted after it.
@@ -288,7 +287,7 @@ export async function fetchImages(
       spent += reserved;
 
       try {
-        const { bytes, mime } = await api.wikiImage(host, choice.url, options.signal);
+        const { bytes, mime } = await wiki.image(choice.url, options.signal);
         // A thumbnail's real size is only known now, and the estimate is an
         // area ratio that is routinely wrong in both directions. If the truth
         // does not fit, the bytes are dropped rather than kept — a budget that

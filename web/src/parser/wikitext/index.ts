@@ -74,11 +74,12 @@ export interface WikiWalkthroughOptions {
    */
   rank?: boolean;
   /**
-   * Record the pictures each hint refers to, for the storage layer to fetch.
+   * Record the pictures each section refers to, for the storage layer to fetch.
    *
-   * Off by default. StrategyWiki's fallback path reads the wiki straight from
-   * the browser and cannot fetch image bytes at all, so turning this on there
-   * would produce references that never resolve.
+   * Off by default, so the UHS and IF Archive paths are unaffected. Both reveal
+   * modes honour it: a `progressive` page hangs its pictures off the hint that
+   * mentioned them, an `as-written` one off the `text` node, and a reference
+   * that could not be fetched still renders as a caption and a link out.
    */
   images?: boolean;
   /**
@@ -98,6 +99,17 @@ export interface WikiWalkthroughOptions {
 
 /** Templates whose content is a spoiler and must start hidden. */
 const SPOILER_TEMPLATES = /^(spoiler|hidden|collapse|mbox spoiler)/i;
+
+/**
+ * Navigation furniture, on every StrategyWiki page.
+ *
+ * `{{Header Nav}}` and `{{Footer Nav}}` expand to a nav bar, never to a phrase,
+ * so asking the wiki about them is a request per page spent on something that
+ * gets thrown away at the far end anyway. The `Footer Nav` is not wasted
+ * everywhere — `./strategywiki` reads the reading order out of it — but that
+ * happens on the raw wikitext, before any of this.
+ */
+const NAV_TEMPLATE = /^(header|footer)[ _]nav\b/i;
 
 /**
  * Namespaced links that are filing, not prose.
@@ -386,11 +398,14 @@ const PAGE_CONTEXT = /\b(PAGENAME|SUBPAGENAME|FULLPAGENAME|BASEPAGENAME|NAMESPAC
 /**
  * The pages a page links to, in the order it links to them.
  *
- * For a walkthrough this *is* the structure. StrategyWiki writes a game as a
- * hand-ordered index — `Chrono Trigger/Walkthrough` naming its chapters in the
- * order you play them — and the order is the whole value: a walkthrough sorted
- * alphabetically is not a walkthrough. `prop=links` cannot supply it, because
- * the API returns links alphabetically, so it has to come from the wikitext.
+ * For a walkthrough the order is the whole value — one sorted alphabetically is
+ * not a walkthrough — and `prop=links` cannot supply it, because the API returns
+ * links alphabetically. So it has to come from the wikitext.
+ *
+ * This is the *second* place StrategyWiki's order can be read from, not the
+ * first: `Chrono Trigger/Walkthrough` is prose, and the chain is in the
+ * `{{Footer Nav}}` at the foot of each chapter (see `./strategywiki`). Some
+ * games do write their Walkthrough page as an index, and this reads those.
  *
  * Deliberately not `toInline`, which resolves against a set of already-known
  * pages; here the links are what *decides* the set. Section headings come back
@@ -437,6 +452,7 @@ export function collectExpandable(wikitext: string): string[] {
     const inner = match[1]!.trim();
     if (!inner || inner.length > 300) continue;
     if (SPOILER_TEMPLATES.test(inner)) continue;
+    if (NAV_TEMPLATE.test(inner)) continue;
     if (PAGE_CONTEXT.test(inner)) continue;
     if (templateText(inner) !== null) continue;
     found.add(inner);
@@ -886,12 +902,19 @@ function pageToSubject(
         }
         target.children.push(group);
       } else {
+        const id = `${target.id}.t${target.children.length}`;
         const text: TextNode = {
-          id: `${target.id}.t${target.children.length}`,
+          id,
           type: 'text',
           label: section.title || root.label,
           content: joinBlocks(plain),
         };
+        // Every block's pictures, not one block's: the prose was just joined
+        // into a single node, so there is nowhere else for them to hang.
+        const pictures = plain.flatMap((block, index) =>
+          imagesFor(block, `${id}:b${index}`, wikiBase) ?? [],
+        );
+        if (pictures.length > 0) text.images = pictures;
         target.children.push(text);
       }
     }

@@ -154,6 +154,31 @@ export function parseAllPages(
     }));
 }
 
+/**
+ * One row per game, from a listing of its pages.
+ *
+ * StrategyWiki files a game as a tree of sub-pages, and browsing used to show
+ * every one of them: forty rows for Chrono Trigger, each with its own Download
+ * button. They were not forty choices — `downloadStrategyWiki` takes the game
+ * out of whichever ref it is handed and fetches the whole tree — so all forty
+ * buttons did the identical thing. One row is the honest count.
+ *
+ * The game's own page may or may not be in the listing (`apprefix=Chrono
+ * Trigger/` excludes it), so the row is built from the prefix of whatever came
+ * back rather than by looking for a root entry.
+ */
+export function collapseToGames(entries: CatalogEntry[]): CatalogEntry[] {
+  const games = new Map<string, CatalogEntry>();
+  for (const entry of entries) {
+    const game = entry.title.split('/')[0]!.trim();
+    if (!game) continue;
+    const key = normalizeTitle(game);
+    if (games.has(key)) continue;
+    games.set(key, { ...entry, title: game, normalizedTitle: key, ref: game });
+  }
+  return [...games.values()];
+}
+
 /** Browse listing: every page under a prefix, e.g. "Chrono Trigger/". */
 export async function listWikiPages(
   cache: Cache,

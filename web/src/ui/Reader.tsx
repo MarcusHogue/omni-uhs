@@ -2,7 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 
 import type { HintGroupNode, ImageNode, Inline, Node, TextNode } from '../parser/ast';
-import { api } from '../api/client';
+import type { WikiTransport } from '../api/client';
+import { strategyWikiTransport, wikiTransport } from '../api/client';
 import {
   getDocument,
   getImage,
@@ -182,7 +183,7 @@ export function Reader(): JSX.Element {
           revealed={revealed}
           onReveal={reveal}
           onNavigate={go}
-          {...(wikiHostOf(stored) ? { wikiHost: wikiHostOf(stored) } : {})}
+          {...(wikiOf(stored) ? { wiki: wikiOf(stored) } : {})}
           onResetReveals={() => {
             void clearRevealState(documentId).then(() => setRevealedState({}));
           }}
@@ -198,20 +199,24 @@ interface ViewProps {
   onReveal: (groupId: string, count: number) => void;
   onNavigate: (id: string) => void;
   onResetReveals: () => void;
-  /** Which wiki this document came from, for fetching a picture at full size. */
-  wikiHost?: string;
+  /** How to reach this document's wiki, for fetching a picture at full size. */
+  wiki?: WikiTransport;
 }
 
 /**
- * The wiki a document came from, or undefined for the file-based sources.
+ * How to reach the wiki a document came from, or undefined for the file-based
+ * sources.
  *
- * Read from the stored source URL rather than kept as a field: the URL is the
- * thing the download actually recorded, and a second copy could disagree with it.
+ * The host is read from the stored source URL rather than kept as a field: the
+ * URL is the thing the download actually recorded, and a second copy could
+ * disagree with it. StrategyWiki gets its own transport rather than a hostname,
+ * because reaching it may mean going round the proxy — see `client.ts`.
  */
-function wikiHostOf(stored: StoredDocument): string | undefined {
+function wikiOf(stored: StoredDocument): WikiTransport | undefined {
+  if (stored.sourceKind === 'strategywiki') return strategyWikiTransport;
   if (stored.sourceKind !== 'fandom' && stored.sourceKind !== 'wikigg') return undefined;
   try {
-    return new URL(stored.sourceUrl).hostname;
+    return wikiTransport(new URL(stored.sourceUrl).hostname);
   } catch {
     return undefined;
   }
@@ -225,7 +230,13 @@ function NodeView(props: ViewProps): JSX.Element {
     case 'hints':
       return <HintsView {...props} group={node} />;
     case 'text':
-      return <TextView node={node} onNavigate={props.onNavigate} />;
+      return (
+        <TextView
+          node={node}
+          onNavigate={props.onNavigate}
+          {...(props.wiki ? { wiki: props.wiki } : {})}
+        />
+      );
     case 'image':
       return <ImageView node={node} onNavigate={props.onNavigate} />;
     case 'link':
@@ -256,14 +267,14 @@ function NodeView(props: ViewProps): JSX.Element {
  * declined on dimensions, and advertising "2 pictures" that turn out to be
  * furniture is worse than saying nothing.
  */
-function pictureCount(group: HintGroupNode): number {
-  let found = 0;
-  for (const hint of group.hints) {
-    for (const image of hint.images ?? []) {
-      if (image.source?.omitted !== 'decorative') found += 1;
-    }
-  }
-  return found;
+function pictureCount(node: Node): number {
+  const images =
+    node.type === 'hints'
+      ? node.hints.flatMap((hint) => hint.images ?? [])
+      : node.type === 'text'
+        ? (node.images ?? [])
+        : [];
+  return images.filter((image) => image.source?.omitted !== 'decorative').length;
 }
 
 function SubjectView({ node, revealed, onNavigate }: ViewProps): JSX.Element {
@@ -275,7 +286,7 @@ function SubjectView({ node, revealed, onNavigate }: ViewProps): JSX.Element {
       {children.map((child, position) => {
         const target = child.type === 'link' ? child.targetId : child.id;
         const seen = child.type === 'hints' ? (revealed[child.id ?? ''] ?? 0) : 0;
-        const pictures = child.type === 'hints' ? pictureCount(child) : 0;
+        const pictures = pictureCount(child);
         return (
           <li key={child.id ?? position} className="row" data-type={child.type}>
             <button
@@ -287,7 +298,7 @@ function SubjectView({ node, revealed, onNavigate }: ViewProps): JSX.Element {
               <span className="row-title">
                 <TypeMark type={child.type} /> {child.label || '(untitled)'}
               </span>
-              {child.type === 'hints' && (
+              {child.type === 'hints' ? (
                 <span className="row-meta muted">
                   <span>
                     {child.hints.length} hint{child.hints.length === 1 ? '' : 's'}
@@ -299,6 +310,16 @@ function SubjectView({ node, revealed, onNavigate }: ViewProps): JSX.Element {
                       carry no pill, and that is not a verdict on them. */}
                   {child.role && <span className="pill">{child.role}</span>}
                 </span>
+              ) : (
+                // A page read as-written is one row per section, so the count
+                // is the only thing that says a picture is down there at all.
+                pictures > 0 && (
+                  <span className="row-meta muted">
+                    <span>
+                      {pictures} picture{pictures === 1 ? '' : 's'}
+                    </span>
+                  </span>
+                )
               )}
             </button>
           </li>
@@ -336,7 +357,7 @@ function HintsView({
   revealed,
   onReveal,
   onNavigate,
-  wikiHost,
+  wiki,
 }: ViewProps & { group: HintGroupNode }): JSX.Element {
   const id = group.id ?? '';
   const shown = Math.min(revealed[id] ?? 0, group.hints.length);
@@ -379,7 +400,7 @@ function HintsView({
                 <ImageFigure
                   key={image.id ?? n}
                   node={image}
-                  {...(wikiHost ? { host: wikiHost } : {})}
+                  {...(wiki ? { wiki } : {})}
                 />
               ))}
             </div>
@@ -412,14 +433,26 @@ function HintsView({
 function TextView({
   node,
   onNavigate,
+  wiki,
 }: {
   node: TextNode;
   onNavigate: (id: string) => void;
+  wiki?: WikiTransport;
 }): JSX.Element {
   return (
     <div className="textnode">
       <h2>{node.label}</h2>
       <InlineRuns content={node.content} onNavigate={onNavigate} />
+      {/*
+        Not behind a reveal, unlike a hint's pictures. A page rendered
+        as-written is one whose author already decided what is hidden — on
+        StrategyWiki that is the spoiler templates, which become their own
+        group — so holding its illustrations back would hide something the
+        source shows in plain sight.
+      */}
+      {node.images?.map((image, n) => (
+        <ImageFigure key={image.id ?? n} node={image} {...(wiki ? { wiki } : {})} />
+      ))}
     </div>
   );
 }
@@ -455,7 +488,7 @@ function useBlobUrl(bytes: Uint8Array | null, mime: string): string | null {
  * Prince puzzle the caption is "Solution to the Antechamber door", so a silent
  * gap there is the difference between an answer and a dead end.
  */
-function ImageFigure({ node, host }: { node: ImageNode; host?: string }): JSX.Element {
+function ImageFigure({ node, wiki }: { node: ImageNode; wiki?: WikiTransport }): JSX.Element {
   const [bytes, setBytes] = useState<Uint8Array | null>(
     node.data.length > 0 ? node.data : null,
   );
@@ -480,7 +513,7 @@ function ImageFigure({ node, host }: { node: ImageNode; host?: string }): JSX.El
   }, [node]);
 
   const showFullSize = async (): Promise<void> => {
-    if (!host || !file) return;
+    if (!wiki || !file) return;
     setFull('loading');
     setError('');
     try {
@@ -488,10 +521,10 @@ function ImageFigure({ node, host }: { node: ImageNode; host?: string }): JSX.El
       // and MediaWiki's URLs carry a cache-busting parameter that would go
       // stale. So it is resolved now, which also means "full size" really is
       // whatever the wiki holds today.
-      const info = await resolveImages(host, [file], 10_000);
+      const info = await resolveImages(wiki, [file], 10_000);
       const found = info.get(file);
       if (!found) throw new Error('the wiki no longer has this file');
-      const fetched = await api.wikiImage(host, found.url);
+      const fetched = await wiki.image(found.url);
       setBytes(fetched.bytes);
       setMime(fetched.mime);
       setFull('shown');
@@ -518,7 +551,7 @@ function ImageFigure({ node, host }: { node: ImageNode; host?: string }): JSX.El
       )}
       <figcaption>
         {node.label}
-        {host && file && (
+        {wiki && file && (
           <>
             {' '}
             {full === 'shown' ? (
