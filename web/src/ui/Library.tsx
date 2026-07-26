@@ -65,13 +65,11 @@ export function Library(): JSX.Element {
               {!document.attribution && (
                 <span className="attribution muted">{document.license}</span>
               )}
-              {document.warnings.length > 0 && (
-                <span className="warnings">
-                  {document.warnings.length} parser note
-                  {document.warnings.length === 1 ? '' : 's'}
-                </span>
-              )}
             </Link>
+            {/* Outside the <Link>, and a <details> rather than a button: nested
+                inside it, opening the notes would navigate to the reader
+                instead. */}
+            {document.warnings.length > 0 && <ParserNotes warnings={document.warnings} />}
             <button
               type="button"
               className="row-action danger"
@@ -93,5 +91,32 @@ export function Library(): JSX.Element {
         {documents.length} title{documents.length === 1 ? '' : 's'} · {formatBytes(total)} stored
       </p>
     </>
+  );
+}
+
+/**
+ * What the parser had to say about a download.
+ *
+ * These were stored from the first release and counted but never shown, which
+ * made the count an odd thing to print: it told you something had happened and
+ * gave you no way to find out what. They are worth reading — a wiki download
+ * says which pages came back empty and which pictures the CDN refused, and the
+ * refused ones are fetchable on a tap once you know they exist.
+ *
+ * Collapsed by default because a normal download has none and a large one can
+ * have dozens.
+ */
+function ParserNotes({ warnings }: { warnings: string[] }): JSX.Element {
+  return (
+    <details className="notes">
+      <summary>
+        {warnings.length} parser note{warnings.length === 1 ? '' : 's'}
+      </summary>
+      <ul>
+        {warnings.map((warning, i) => (
+          <li key={i}>{warning}</li>
+        ))}
+      </ul>
+    </details>
   );
 }

@@ -399,6 +399,53 @@ Enter the code from the study.
   });
 });
 
+describe('templates standing in for words', () => {
+  const parse = (wikitext: string): ParseResult =>
+    parseWikiWalkthrough([{ title: 'Billiard Room', wikitext, revision: '1' }], {
+      ...OPTIONS,
+      kind: 'wikigg',
+      reveal: 'progressive',
+      rank: true,
+    });
+
+  const text = (wikitext: string): string =>
+    [...walk(parse(wikitext).document.root)]
+      .flatMap((node) => (node.type === 'hints' ? node.hints : []))
+      .map((hint) => inlineText(hint.content))
+      .join(' | ');
+
+  it('keeps the styled text of a two-parameter colour template', () => {
+    // Real, from blueprince.wiki.gg's dartboard solution. The colour *is* the
+    // answer, and dropping the template took the only word that mattered:
+    // "### {{ColorText|add|Blue}} is addition." came out as " is addition."
+    expect(text('== Solution ==\n# {{ColorText|add|Blue}} is addition.\n')).toContain(
+      'Blue is addition.',
+    );
+  });
+
+  it('reads the last unnamed parameter, which is where wikitext puts the text', () => {
+    expect(text('== S ==\nThe {{Color|#f00|crimson door}} opens.\n')).toContain(
+      'The crimson door opens.',
+    );
+    // Named parameters are configuration and do not count towards the arity.
+    expect(text('== S ==\nA {{Font|serif text|face=serif}} sign.\n')).toContain(
+      'A serif text sign.',
+    );
+  });
+
+  it('still refuses a two-parameter template whose roles it cannot know', () => {
+    // Not every template puts the display text last; guessing would show the
+    // hover text instead of what is on screen.
+    expect(text('== S ==\nThe {{tooltip|shown|hovered}} thing.\n')).not.toContain('hovered');
+  });
+
+  it('still drops layout parameters', () => {
+    const out = text('== S ==\nSome prose.{{Reflist|30em}}\n');
+    expect(out).toContain('Some prose.');
+    expect(out).not.toContain('30em');
+  });
+});
+
 describe('guidance ranking (spec §6.4)', () => {
   const GUIDE = `== Strategy ==
 You need to break the crystal first, then jump to the ledge on the right and

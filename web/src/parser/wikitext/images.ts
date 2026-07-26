@@ -72,14 +72,15 @@ export function looksDecorativeName(file: string): boolean {
 }
 
 /**
- * Split a file link's body on `|`, ignoring the pipes inside a nested
- * `[[wikilink|label]]` or `{{template|arg}}` in the caption.
+ * Split a template or link body on `|`, ignoring the pipes inside a nested
+ * `[[wikilink|label]]` or `{{template|arg}}`.
  *
  * Captions do contain links — "Solution to the [[Antechamber]] door" — and
  * a plain `split('|')` would cut them in half and hand back "label]]" as the
- * caption.
+ * caption. `wikitext/index.ts` uses it for the same reason when pulling the body
+ * out of a box template.
  */
-function splitParams(body: string): string[] {
+export function splitParams(body: string): string[] {
   const parts: string[] = [];
   let depth = 0;
   let current = '';

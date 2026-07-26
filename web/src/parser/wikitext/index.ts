@@ -26,7 +26,7 @@ import { inlineText } from '../ast';
 import { stableId } from '../id';
 import { guidanceRank, isNeverHint, looksLikeGuidance, scoreSection } from './guidance';
 import type { ImageRef } from './images';
-import { extractGalleries, findFileLinks, stripFileLinks } from './images';
+import { extractGalleries, findFileLinks, splitParams, stripFileLinks } from './images';
 
 export interface WikiPageInput {
   title: string;
@@ -109,17 +109,59 @@ const removed = (text: string): string =>
     .replace(/<!--[\s\S]*?-->/g, '')
     .replace(/<ref[^>]*\/>/gi, '')
     .replace(/<ref[^>]*>[\s\S]*?<\/ref>/gi, '')
-    .replace(FILING_LINK, '');
+    .replace(FILING_LINK, '')
+    // A link whose target was a template — `[[{{PAGENAME}}|Galligan]]` — has
+    // lost its target by the time this runs, and `[[|Galligan]]` matches no
+    // link pattern, so it survived as the residue `Galligan]]`. Tunic writes
+    // `[[{{PAGENAME}}]]`, which left a bare `[[]]`.
+    .replace(/\[\[\s*\]\]/g, '')
+    .replace(/\[\[\s*\|/g, '[[');
+
+/**
+ * An HTML tag, of any name.
+ *
+ * A fixed list of inline tags was not enough. Hollow Knight writes its section
+ * headings as literal `<h2>Usefulness</h2>` — 77 of them across ten pages —
+ * and between them the wikis in use also emit `<code>`, `<p class="MsoNormal">`,
+ * `<noinclude>`, `<rss>` and `<twitterfeed theme=dark>`. All of it reached the
+ * reader as text.
+ *
+ * Two patterns rather than one, so a comparison cannot be eaten: a bare tag has
+ * to close immediately after the name, and one with attributes has to contain an
+ * `=`. That leaves `if x<y and a>b` alone, which `<[a-z][^>]*>` would have
+ * swallowed whole.
+ *
+ * `<math>` goes the same way and its contents stay, which is what you want:
+ * Blue Prince's worked examples are `<math>0 + 5 + 13 = 18</math>`.
+ */
+const HTML_TAG = /<\/?[a-z][a-z0-9]{0,14}\s*\/?>/gi;
+const HTML_TAG_WITH_ATTRS = /<[a-z][a-z0-9]{0,14}\s[^<>]*=[^<>]*\/?>/gi;
 
 /** Everything else, once the links have been dealt with. */
 const cleaned = (text: string): string =>
   text
     .replace(/\[(?:https?:)?\/\/\S+\s+([^\]]+)\]/g, '$1')
     .replace(/\[(?:https?:)?\/\/\S+\]/g, '')
-    .replace(/'''''([^']+)'''''/g, '$1')
-    .replace(/'''([^']+)'''/g, '$1')
-    .replace(/''([^']+)''/g, '$1')
-    .replace(/<\/?(?:small|big|b|i|u|s|em|strong|span|div|center|br)[^>]*>/gi, '')
+    // Runs, not pairs. Wikitext marks emphasis with 2, 3 or 5 apostrophes and
+    // nests them freely: Obra Dinn writes `'''''Murder'', part 3'''`, where
+    // matching `'''…'''` and `''…''` as pairs leaves marks stranded mid-sentence.
+    // A lone apostrophe is punctuation and is left alone.
+    .replace(/'{2,}/g, '')
+    .replace(HTML_TAG, '')
+    .replace(HTML_TAG_WITH_ATTRS, '')
+    // What `<math>` was wrapping. Stripping the tag leaves the LaTeX, and Blue
+    // Prince's worked dartboard examples are arithmetic: `\times 4 \times 2` and
+    // `\frac{8}{4}` are the calculation the reader came for, so they are
+    // translated rather than shown raw or dropped.
+    .replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '$1/$2')
+    .replace(/\\times/g, '×')
+    .replace(/\\cdot/g, '·')
+    .replace(/\\div/g, '÷')
+    .replace(/\\(?:left|right|,|;|!|quad|qquad)/g, '')
+    // An indent marker that survived a flattened block: `:<math>…` became
+    // `: 0 + 12 = 12`. Only before a digit or a backslash, so a time of day
+    // ("10:30", no space before the colon) is left alone.
+    .replace(/\s+:\s*(?=[\d\\])/g, ' ')
     .replace(/&nbsp;/g, ' ')
     .replace(/&amp;/g, '&')
     .replace(/&lt;/g, '<')
@@ -135,7 +177,9 @@ const cleaned = (text: string): string =>
  */
 export function stripMarkup(text: string): string {
   return cleaned(
-    removed(text)
+    // Templates go too. Without this a section title kept them verbatim, and
+    // Obra Dinn's transcript headings read `Transcript {{play|End_pt1.ogg}}`.
+    extractTemplates(removed(text)).text
       .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
       .replace(/\[\[([^\]]+)\]\]/g, '$1'),
   ).trim();
@@ -196,6 +240,21 @@ export function toInline(
 }
 
 /**
+ * Templates whose job is to style a run of text, where the text is the last
+ * unnamed parameter.
+ *
+ * The convention is wikitext's own: `[[target|label]]`, `[[File:x|thumb|caption]]`
+ * — what is displayed comes last. A styling template follows it, and the earlier
+ * parameters are the colour, class or size.
+ *
+ * Matched on the name rather than guessed at from the values, because the values
+ * cannot be told apart: in `{{ColorText|add|Blue}}` both are short lowercase-ish
+ * words and only the name says which is presentation.
+ */
+const TEXT_TEMPLATE =
+  /^(colou?r\w*|\w*colou?r|font\w*|text|fg|bg|small|big|large|nowrap|abbr|tt|kbd|code|em|strong|mono)$/i;
+
+/**
  * The display text of a template that is standing in for a word.
  *
  * Dropping templates wholesale is right for infoboxes and citations, but game
@@ -204,53 +263,111 @@ export function toInline(
  * complex and long ;". So a template with exactly one unnamed parameter gives
  * that parameter back.
  *
- * Exactly one, deliberately. Two or more and the parameters have roles this
- * cannot know — `{{tooltip|shown|hovered}}` would be a coin flip — so those are
- * still dropped. Bare dimensions (`{{Reflist|30em}}`) and anything wordless are
- * layout, not prose.
+ * With two or more, the parameters have roles this cannot generally know —
+ * `{{tooltip|shown|hovered}}` would be a coin flip — so it only reads the ones
+ * whose *name* says the last parameter is the text. That case is not
+ * hypothetical and the failure was not cosmetic: `blueprince.wiki.gg` writes the
+ * dartboard solution as `### {{ColorText|add|Blue}} is addition.`, which came
+ * out as " is addition." The colour *is* the answer, and four steps of a puzzle
+ * lost the only word that mattered.
+ *
+ * Bare dimensions (`{{Reflist|30em}}`) and anything wordless are layout, not
+ * prose. Named parameters are configuration, so they are ignored when counting
+ * — `{{Foo|text|class=x}}` still yields "text".
  */
 function templateText(buffer: string): string | null {
-  const parts = buffer.split('|');
-  if (parts.length !== 2) return null;
-  const value = parts[1]!.trim();
+  // Bracket-aware, because a parameter can hold a link and a plain `split('|')`
+  // cuts it in half. `{{transcript|who=[[Paul Moss|Moss]]|line=…}}` came apart
+  // into `who=[[Paul Moss` and `Moss]]`, and the second fragment looked exactly
+  // like a lone unnamed parameter — so the reader was shown `Moss]]`.
+  const parts = splitParams(buffer);
+  const name = parts[0]!.trim();
+  const unnamed = parts.slice(1).filter((part) => !part.includes('='));
+  if (unnamed.length === 0) return null;
+  if (unnamed.length > 1 && !TEXT_TEMPLATE.test(name)) return null;
+
+  const value = unnamed[unnamed.length - 1]!.trim();
   if (value.length === 0 || value.length > 60) return null;
-  if (value.includes('=')) return null;
   if (!/[a-z]/i.test(value)) return null;
   if (/^\d+(\.\d+)?(px|em|%|pt)?$/i.test(value)) return null;
+  // A media filename is a reference, not a word. Obra Dinn's transcripts open
+  // with `{{play|Escape_pt2.ogg}}`, which put "Escape_pt2.ogg" in the prose.
+  if (/\.(ogg|mp3|wav|webm|ogv|mp4|png|jpe?g|gif|svg|webp|pdf)$/i.test(value)) return null;
   return value;
+}
+
+/**
+ * What a spoiler template is actually hiding.
+ *
+ * `{{spoiler|the butler did it}}` is one unnamed parameter and the whole thing
+ * is the payload. A box form is not: `blueprince.wiki.gg` writes
+ * `{{SpoilerBox|topic=solution|content=…}}`, and joining every parameter back
+ * together put `topic=solution|content=` on screen as prose — and printed the
+ * topic, which on a puzzle page is a word like "solution", right where the
+ * reader had asked not to be told anything yet.
+ *
+ * So: the body parameter when there is one, otherwise the unnamed parameters.
+ */
+function spoilerPayload(buffer: string): string {
+  const parts = splitParams(buffer);
+  const body = parts.find((part) => BODY_PARAM.test(part));
+  if (body) return body.slice(body.indexOf('=') + 1).trim();
+  return parts
+    .slice(1)
+    .filter((part) => !part.includes('='))
+    .join('|')
+    .trim();
 }
 
 /** Remove templates, tracking whether any of them marked a spoiler. */
 function extractTemplates(text: string): { text: string; spoiler: boolean } {
   let spoiler = false;
   let out = '';
-  let depth = 0;
-  let buffer = '';
+  /**
+   * One buffer per open template, innermost last.
+   *
+   * A single buffer reset on every `{{` was the bug: a template containing
+   * another one lost its own name, because by the time its `}}` arrived the
+   * buffer held only the text since the *inner* `{{`. So it was not recognised
+   * as a spoiler and its body was handed to `templateText`, which dropped it.
+   *
+   * That is not an edge case on the wiki this was found on. Blue Prince nests
+   * its puzzle hints — a `{{SpoilerBox}}` holding eight more, including a
+   * `{{CollapsedBox}}` — and every one of those bodies was being deleted.
+   * Resolving inside-out means an inner template's text lands in its parent's
+   * buffer, so the parent still sees a complete body.
+   */
+  const stack: string[] = [];
+  const emit = (fragment: string): void => {
+    if (stack.length > 0) stack[stack.length - 1] += fragment;
+    else out += fragment;
+  };
+
   for (let i = 0; i < text.length; i++) {
     if (text.startsWith('{{', i)) {
-      depth += 1;
+      stack.push('');
       i += 1;
-      buffer = '';
       continue;
     }
-    if (text.startsWith('}}', i) && depth > 0) {
-      depth -= 1;
+    if (text.startsWith('}}', i) && stack.length > 0) {
+      const buffer = stack.pop()!;
       i += 1;
       if (SPOILER_TEMPLATES.test(buffer.trim())) {
         spoiler = true;
-        // Keep the spoiler's payload: "{{spoiler|the butler did it}}".
-        const parts = buffer.split('|');
-        if (parts.length > 1) out += ` ${parts.slice(1).join('|')} `;
+        const payload = spoilerPayload(buffer);
+        if (payload) emit(` ${payload} `);
       } else {
         // No padding: the template sits mid-sentence, next to its punctuation.
-        out += templateText(buffer) ?? '';
+        emit(templateText(buffer) ?? '');
       }
-      buffer = '';
       continue;
     }
-    if (depth > 0) buffer += text[i];
-    else out += text[i];
+    emit(text[i]!);
   }
+
+  // An unclosed `{{` swallowed the rest of the line. Dropped, as before: what it
+  // holds is half a template call, not prose, and `stripBlockMarkup` has already
+  // dealt with the multi-line templates that are meant to span one.
   return { text: out, spoiler };
 }
 
@@ -285,8 +402,44 @@ function flattenOrDrop(template: string): string {
   if (!template.includes('\n')) return template;
   const newlines = template.replace(/[^\n]/g, '');
   const name = template.slice(2).split('|')[0]!.trim();
-  if (!SPOILER_TEMPLATES.test(name)) return newlines;
-  return template.replace(/\s*\n\s*/g, ' ') + newlines;
+  if (SPOILER_TEMPLATES.test(name)) return template.replace(/\s*\n\s*/g, ' ') + newlines;
+
+  const body = bodyParam(template);
+  if (body === null) return newlines;
+  // The body where the box was, padded back to the template's own line count so
+  // section splitting sees the same shape it did before.
+  return body + newlines.slice(body.replace(/[^\n]/g, '').length);
+}
+
+/**
+ * Parameters that hold a box template's body rather than one of its fields.
+ *
+ * The distinction matters because dropping a multi-line template is right for an
+ * infobox and wrong for a container. `blueprince.wiki.gg` writes its worked
+ * dartboard examples as `{{CollapsedBox|header=…|content=<the example>}}`, and
+ * ten such bodies across ten pages were being deleted — "In general, solving the
+ * puzzles gets easier once one or two…", "Once a piece's name has correctly been
+ * entered…". Solutions, thrown away for being inside braces.
+ */
+const BODY_PARAM = /^\s*(?:content|body|text|message|note|info)\s*=/i;
+
+/**
+ * The body of a box template, if it has one.
+ *
+ * Split with `splitParams` rather than on `|`, because a body contains links,
+ * file references and templates of its own, all of which carry pipes.
+ */
+function bodyParam(template: string): string | null {
+  const inner = template.replace(/^\{\{/, '').replace(/\}\}$/, '');
+  for (const part of splitParams(inner)) {
+    if (!BODY_PARAM.test(part)) continue;
+    const value = part.slice(part.indexOf('=') + 1);
+    // A field, not a body: `|text=yes` is configuration. Requiring some length
+    // keeps this to the containers it is meant for.
+    if (value.trim().length < 40) continue;
+    return value;
+  }
+  return null;
 }
 
 export function stripBlockMarkup(wikitext: string): string {
