@@ -446,16 +446,18 @@ export const api = {
   /**
    * The bytes of one StrategyWiki picture.
    *
-   * Proxy first, for the caching and the politeness, then the browser — the same
-   * order and the same reason as `strategyWiki` above. The browser attempt is
-   * expected to fail more often than it succeeds: unlike `api.php`, MediaWiki's
-   * upload directory sends no `Access-Control-Allow-Origin`, so a cross-origin
-   * read of the bytes is at the site's discretion and StrategyWiki may simply
-   * not allow it. It costs one request to find out, and the alternative is
-   * declaring pictures impossible on this source without having tried.
+   * The proxy handles this one, contrary to the expectation it was written
+   * under. StrategyWiki's api.php is bot-challenged, so pictures were assumed to
+   * be challenged too — but the uploads are not on strategywiki.org at all. They
+   * are on `cdn.wikimg.net`, a plain CDN that answers a datacenter request with
+   * a 200 and no interstitial, so the proxy serves and caches them like any
+   * other wiki's.
    *
-   * Either way the failure is visible rather than silent: `fetchImages` marks
-   * the node `unavailable` and the reader shows the caption and a link out.
+   * The browser fallback stays for the day that stops being true. It only fires
+   * on a challenge, and it needs `Access-Control-Allow-Origin` on the CDN, which
+   * is the site's to give — so it may well not work. Either way the failure is
+   * visible rather than silent: `fetchImages` marks the node `unavailable` and
+   * the reader shows the caption and a link out.
    */
   async strategyWikiImage(
     url: string,

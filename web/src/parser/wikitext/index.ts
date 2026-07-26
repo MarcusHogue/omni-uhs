@@ -142,7 +142,7 @@ const NAV_TEMPLATE = /^(header|footer)[ _]nav\b/i;
  * switcher at the top of a page.
  */
 const LAYOUT_TEMPLATE =
-  /^(-|clear|floatingtoc|toc|col|listcol|subtoc\d?|control selector|featured|stub|prettytable)$/i;
+  /^(-|clear|clr|hr|floatingtoc|toc|col|listcol|subtoc\d?|control selector|featured|stub|prettytable|reflist|references|about)$/i;
 
 /**
  * Namespaced links that are filing, not prose.
@@ -424,6 +424,18 @@ const TEXT_TEMPLATE =
  * prose. Named parameters are configuration, so they are ignored when counting
  * — `{{Foo|text|class=x}}` still yields "text".
  */
+/**
+ * A value that is worth having but probably incomplete.
+ *
+ * `{{G|112}}` reads as "112" and that beats deleting it, but the wiki renders
+ * it as a coin icon beside the number — the unit is in the template, not the
+ * parameter. So digits alone are taken as a fallback rather than an answer:
+ * still asked about, still preferred-against when the wiki replies.
+ */
+function isWeakReading(value: string): boolean {
+  return !/[a-z]/i.test(value);
+}
+
 function templateText(buffer: string): string | null {
   // Bracket-aware, because a parameter can hold a link and a plain `split('|')`
   // cuts it in half. `{{transcript|who=[[Paul Moss|Moss]]|line=…}}` came apart
@@ -438,8 +450,14 @@ function templateText(buffer: string): string | null {
 
   const value = unnamed[unnamed.length - 1]!.trim();
   if (value.length === 0 || value.length > 60) return null;
-  if (!/[a-z]/i.test(value)) return null;
-  if (/^\d+(\.\d+)?(px|em|%|pt)?$/i.test(value)) return null;
+  // A *dimension* is layout; a bare number is content. The unit is what tells
+  // them apart, so it is required here — with it optional, `^\d+$` matched and
+  // every number was thrown away: `{{G|112}}` is a price and `{{HP|45}}` is a
+  // health total, and "costs {{G|112}} here" arrived as "costs here" with no
+  // sign anything had gone. Layout templates that take a bare count are
+  // excluded by *name* instead, which is the argument `LAYOUT_TEMPLATE` already
+  // makes: nothing about the value tells a price from a column count.
+  if (/^\d+(\.\d+)?(px|em|%|pt)$/i.test(value)) return null;
   // A media filename is a reference, not a word. Obra Dinn's transcripts open
   // with `{{play|Escape_pt2.ogg}}`, which put "Escape_pt2.ogg" in the prose.
   if (/\.(ogg|mp3|wav|webm|ogv|mp4|png|jpe?g|gif|svg|webp|pdf)$/i.test(value)) return null;
@@ -575,14 +593,27 @@ export function orderedLinks(
 
 export function collectExpandable(wikitext: string): string[] {
   const found = new Set<string>();
-  for (const match of stripBlockMarkup(wikitext).matchAll(/\{\{([^{}\n]*)\}\}/g)) {
+  // Tables too. `stripBlockMarkup` erases their contents, so a page whose only
+  // templates were in a table — which on Hollow Knight is every cost, every
+  // damage figure — was never asked about at all: `collectExpandable` returned
+  // an empty list and the `expanded` map had nothing to offer the cells.
+  const { text, tables } = extractTables(wikitext);
+  const sources = [
+    stripBlockMarkup(text),
+    ...tables.flatMap((table) => [...table.headers, ...table.rows.flat()]),
+  ];
+
+  for (const match of sources.join('\n').matchAll(/\{\{([^{}\n]*)\}\}/g)) {
     const inner = match[1]!.trim();
     if (!inner || inner.length > 300) continue;
     if (SPOILER_TEMPLATES.test(inner)) continue;
     if (NAV_TEMPLATE.test(inner)) continue;
     if (LAYOUT_TEMPLATE.test(splitParams(inner)[0]!.trim())) continue;
     if (PAGE_CONTEXT.test(inner)) continue;
-    if (templateText(inner) !== null) continue;
+    // Only a *strong* reading settles it. A bare number is worth asking about:
+    // the wiki's expansion carries the unit that the parameter alone does not.
+    const direct = templateText(inner);
+    if (direct !== null && !isWeakReading(direct)) continue;
     found.add(inner);
   }
   return [...found];
@@ -653,7 +684,16 @@ function extractTemplates(
         if (payload) emit(` ${payload} `);
       } else {
         // No padding: the template sits mid-sentence, next to its punctuation.
-        emit(templateText(buffer) ?? expandedText(buffer, expanded) ?? '');
+        // The wiki's own expansion wins over a *weak* reading. `{{short|3-3}}`
+        // is readable as "3-3", but Obra Dinn's wiki turns it into the chapter's
+        // name, and taking the digits would throw that away. A reading with
+        // words in it is not improved on, so it short-circuits the lookup.
+        const direct = templateText(buffer);
+        emit(
+          direct !== null && !isWeakReading(direct)
+            ? direct
+            : (expandedText(buffer, expanded) ?? direct ?? ''),
+        );
       }
       continue;
     }
@@ -1101,6 +1141,7 @@ function pageToSubject(
               section.title || root.label,
               resolve,
               page.title,
+              expanded,
             );
             if (node) hint.tables = [node];
           }
@@ -1117,6 +1158,7 @@ function pageToSubject(
         section.title || root.label,
         resolve,
         page.title,
+        expanded,
       );
       if (node) target.children.push(node);
     }
@@ -1138,8 +1180,13 @@ function toTableNode(
   fallbackLabel: string,
   resolve?: Resolver,
   pageTitle = '',
+  expanded: Record<string, string> = {},
 ): TableNode | null {
-  const cells = (row: string[]): Inline[][] => row.map((cell) => toInline(cell, resolve, pageTitle));
+  // The same two steps `toBlocks` runs for prose, in the same order. Cells
+  // bypass `toBlocks` entirely, and `toInline` has never stripped templates —
+  // so without this every template in every cell reached the reader as source.
+  const cells = (row: string[]): Inline[][] =>
+    row.map((cell) => toInline(extractTemplates(cell, expanded).text, resolve, pageTitle));
   const headers = cells(table.headers);
   const rows = table.rows.map(cells);
   const empty =

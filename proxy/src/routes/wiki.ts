@@ -33,8 +33,24 @@ import {
 } from '../catalog/wikis.js';
 import { assertAllowed } from '../upstream/allowlist.js';
 
-/** StrategyWiki serves its uploads from its own host. Both spellings of it. */
-const STRATEGYWIKI_IMAGE_HOSTS = ['strategywiki.org', 'www.strategywiki.org'];
+/**
+ * Where StrategyWiki's uploads actually live.
+ *
+ * Not on strategywiki.org, which is what this list first assumed and why every
+ * picture failed with "Upstream host not allowed: cdn.wikimg.net". `imageinfo`
+ * hands back `https://cdn.wikimg.net/en/strategywiki/images/…` — a separate CDN
+ * — and the wiki's own host never appears in an image URL at all. Both are kept
+ * so a redirect between them is still allowed.
+ *
+ * Only this route's list is widened, not `config.upstreamAllowlist`: the fetcher
+ * takes a per-request allowlist *instead of* the global one, so there is nothing
+ * to gain from loosening the boot-time SSRF boundary as well.
+ */
+const STRATEGYWIKI_IMAGE_HOSTS = [
+  'cdn.wikimg.net',
+  'strategywiki.org',
+  'www.strategywiki.org',
+];
 
 /** Only read actions are proxied; nothing may write to a wiki. */
 const ALLOWED_ACTIONS = new Set(['query', 'parse', 'opensearch', 'expandtemplates']);
@@ -80,9 +96,8 @@ export async function wikiRoutes(app: FastifyInstance): Promise<void> {
    * accepts. StrategyWiki is a boot-time upstream instead, so its check is the
    * fixed pair below and nothing a request can influence.
    *
-   * StrategyWiki serves uploads from its own host, so the allowlist here is the
-   * same one `/api/strategywiki` uses. `assertAllowed` re-runs on every redirect
-   * hop inside the fetcher, so a 302 towards something internal is rejected too.
+   * `assertAllowed` re-runs on every redirect hop inside the fetcher, so a 302
+   * towards something internal is rejected there too.
    */
   app.get('/api/strategywiki/image', async (request, reply) => {
     const { url } = request.query as { url?: string };

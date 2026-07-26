@@ -85,6 +85,26 @@ describe('extractTables', () => {
     expect(table!.rows).toEqual([['Sword', 'Sharp']]);
   });
 
+  it('keeps the header when the table opens with a row break', () => {
+    // Fandom's standard `article-table` puts a `|-` *before* its header row, so
+    // ending the header block on the first one lost all three headings to a
+    // data row and left the table with no header at all. Verbatim from
+    // hollowknight.fandom.com "Map and Quill" (CC-BY-SA).
+    const fandom = `{| class="article-table formatted-table" style="width: 100%;"
+|-
+! style="min-width: 96px;" | Item
+! Description
+! style="min-width: 5rem;" | Cost
+|-
+| Quill
+| <i>Used to record one's travels.</i>
+| {{G|120}}
+|}`;
+    const [table] = extractTables(fandom).tables;
+    expect(table!.headers).toEqual(['Item', 'Description', 'Cost']);
+    expect(table!.rows).toHaveLength(1);
+  });
+
   it('treats a ! after the first row break as a row header, not a heading', () => {
     const rowHeaders = `{|
 !Name!!Value
@@ -318,6 +338,48 @@ After.`;
     );
     const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
     expect(table.rows[0]![0]![0]).toEqual({ kind: 'run', text: 'Iron Blade' });
+  });
+
+  it('reads the templates in a cell instead of printing them', () => {
+    // The reported bug. Cells bypass `toBlocks`, which is what strips templates
+    // for prose, and `toInline` has never done it — so every template in every
+    // cell reached the reader as source: `{{G|112}}` in a Cost column.
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Hollow Knight/Map and Quill',
+          wikitext: '{|\n|-\n! Item !! Cost\n|-\n| Quill || {{G|120}}\n|}',
+          revision: '1',
+        },
+      ],
+      { ...OPTIONS, kind: 'fandom', gameTitle: 'Hollow Knight' },
+    );
+    const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
+    expect(plain(table.rows[0]![1]!)).toBe('120');
+  });
+
+  it('prefers what the wiki says a cell\'s template means', () => {
+    // `{{G|120}}` renders as a coin icon beside the number, so the parameter
+    // alone is a fallback rather than the answer — the expansion is asked for
+    // and used when it arrives. Here it resolves to the same digits, which is
+    // the point: both paths agree, and neither leaves the cell empty.
+    const { document } = parseWikiWalkthrough(
+      [
+        {
+          title: 'Hollow Knight/Map and Quill',
+          wikitext: '{|\n|-\n| Quill || {{G|120}}\n|}',
+          revision: '1',
+        },
+      ],
+      {
+        ...OPTIONS,
+        kind: 'fandom',
+        gameTitle: 'Hollow Knight',
+        expanded: { 'G|120': '[[File:Geo.png|20x20px|link=Geo|Base Geo drop value]] 120' },
+      },
+    );
+    const table = [...walk(document.root)].find((n): n is TableNode => n.type === 'table')!;
+    expect(plain(table.rows[0]![1]!)).toBe('120');
   });
 
   it('leaves a layout-only table out rather than emitting an empty one', () => {
