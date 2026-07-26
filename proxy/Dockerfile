@@ -55,9 +55,11 @@ COPY --from=build /app/proxy/dist ./dist
 COPY --from=build /app/proxy/package.json ./package.json
 COPY --from=build --chown=nonroot:nonroot /seed/cache /data/cache
 
+ARG APP_VERSION=dev
 ENV NODE_ENV=production \
     PORT=8080 \
-    CACHE_DIR=/data/cache
+    CACHE_DIR=/data/cache \
+    APP_VERSION=$APP_VERSION
 
 # distroless has no shell, so the health check is an exec-form node one-liner.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \

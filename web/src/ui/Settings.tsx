@@ -13,7 +13,8 @@ import {
   type ExportScope,
 } from '../storage/exchange';
 import { formatBytes } from './bits';
-import { useLibrary } from './hooks';
+import { useAppUpdate, useLibrary, useOnline } from './hooks';
+import { isReleaseBuild, WEB_VERSION } from './update';
 import {
   applyTextScale,
   applyTheme,
@@ -26,6 +27,8 @@ import {
 
 export function Settings(): JSX.Element {
   const { documents, reload } = useLibrary();
+  const update = useAppUpdate();
+  const online = useOnline();
   const [persisted, setPersisted] = useState<boolean | null>(null);
   const [estimate, setEstimate] = useState<{ usage: number; quota: number } | null>(null);
   const [decodeIncentive, setDecodeIncentive] = useState(false);
@@ -311,6 +314,67 @@ export function Settings(): JSX.Element {
               ))}
             </ul>
           </div>
+        )}
+      </section>
+
+      <section>
+        <h2>Version</h2>
+        {isReleaseBuild(WEB_VERSION) ? (
+          <>
+            <dl className="versions">
+              <dt>This app</dt>
+              <dd className="mono">{WEB_VERSION}</dd>
+              <dt>Proxy</dt>
+              <dd className="mono">
+                {update.state.proxyVersion ?? (online ? 'not reachable' : 'offline')}
+              </dd>
+            </dl>
+            {update.state.reason === 'service-worker' && (
+              <div className="warnings-box">
+                <strong>A new version is ready to install.</strong>
+                <p>
+                  It is already downloaded. Reloading swaps it in; your library and
+                  reading progress are untouched.
+                </p>
+                <button type="button" onClick={update.apply}>
+                  Reload to update
+                </button>
+              </div>
+            )}
+            {update.state.reason === 'version-mismatch' && (
+              <div className="warnings-box">
+                <strong>The app and the proxy are on different builds.</strong>
+                <p>
+                  Usually one container was updated and the other was not — pull both
+                  and restart them. If they already match on the server, this browser is
+                  still holding an older copy, and reloading will pick the new one up.
+                </p>
+                <button type="button" onClick={update.apply}>
+                  Reload
+                </button>
+              </div>
+            )}
+            {update.state.reason === null &&
+              (update.state.checked ? (
+                <p className="muted">Up to date.</p>
+              ) : (
+                <p className="muted">
+                  {online
+                    ? 'The proxy has not answered a version check yet, so there is nothing to compare against.'
+                    : 'Offline — versions can only be compared with a connection.'}
+                </p>
+              ))}
+            <div className="buttons">
+              <button type="button" onClick={() => void update.check()}>
+                Check for updates
+              </button>
+            </div>
+          </>
+        ) : (
+          <p className="muted">
+            A development build. Version checks are off — they only mean something
+            for images built by the publish workflow.
+          </p>
         )}
       </section>
 

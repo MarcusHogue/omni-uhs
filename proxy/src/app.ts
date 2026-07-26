@@ -17,6 +17,9 @@ export interface AppOptions {
   logger?: boolean;
 }
 
+/** Reported by /api/version so a restart is visible without reading the logs. */
+const STARTED_AT = new Date().toISOString();
+
 /** The health check fires every 30 seconds and is never worth a log line. */
 const isNoise = (url: string): boolean => url === '/healthz' || url.startsWith('/healthz?');
 
@@ -80,7 +83,22 @@ export async function buildApp(options: AppOptions = {}): Promise<FastifyInstanc
     },
   );
 
-  app.get('/healthz', async () => ({ status: 'ok' }));
+  app.get('/healthz', async () => ({ status: 'ok', version: config.version }));
+
+  /**
+   * Which build is answering.
+   *
+   * The web app compares this with the version baked into its own bundle: a
+   * mismatch means one of the two containers was updated and the other was not,
+   * or the browser is still running a cached bundle from before the last
+   * deploy. Never cached — a stale answer here is worse than none.
+   */
+  app.get('/api/version', async (_request, reply) =>
+    reply.header('cache-control', 'no-store').send({
+      version: config.version,
+      startedAt: STARTED_AT,
+    }),
+  );
 
   await app.register(uhsRoutes);
   await app.register(ifArchiveRoutes);

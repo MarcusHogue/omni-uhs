@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
-import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation } from 'react-router-dom';
 
 import { getSetting, requestPersistence, setSetting } from '../storage/db';
-import { useChromeVisibility, useOnline } from './hooks';
+import { useAppUpdate, useChromeVisibility, useOnline } from './hooks';
 
 /**
  * App shell.
@@ -13,6 +13,7 @@ import { useChromeVisibility, useOnline } from './hooks';
  */
 export function App(): JSX.Element {
   const online = useOnline();
+  const update = useAppUpdate();
   const chromeVisible = useChromeVisibility();
   const [showInstallTip, setShowInstallTip] = useState(false);
   const location = useLocation();
@@ -41,6 +42,38 @@ export function App(): JSX.Element {
           </span>
         )}
       </header>
+
+      {/*
+        Deliberately small and deliberately dismissible. An update is worth
+        mentioning once; it is never worth interrupting a hint for. Settings
+        keeps the full picture for anyone who goes looking.
+      */}
+      {update.state.reason !== null && !update.dismissed && (
+        <div className="update-bar" role="status">
+          <span>
+            {update.state.reason === 'service-worker'
+              ? 'A new version is ready.'
+              : 'The server is running a different version.'}
+          </span>
+          {update.state.reason === 'service-worker' ? (
+            <button type="button" className="linkish update-action" onClick={update.apply}>
+              Reload
+            </button>
+          ) : (
+            <Link className="update-action" to="/settings">
+              Details
+            </Link>
+          )}
+          <button
+            type="button"
+            className="linkish update-dismiss"
+            aria-label="Dismiss the update notice"
+            onClick={update.dismiss}
+          >
+            ×
+          </button>
+        </div>
+      )}
 
       <main className="app-main">
         {/*

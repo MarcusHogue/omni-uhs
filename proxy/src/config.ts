@@ -34,6 +34,13 @@ const level = (value: string | undefined): LogLevel => {
 };
 
 export const config = {
+  /**
+   * The build this container was made from — the short commit SHA, stamped in
+   * by the publish workflow. `dev` for anything built by hand, which is the
+   * signal the app uses to keep quiet about versions during development.
+   */
+  version: process.env['APP_VERSION']?.trim() || 'dev',
+
   port: int(process.env['PORT'], 8080),
   host: process.env['HOST'] ?? '0.0.0.0',
   cacheDir: resolve(process.env['CACHE_DIR'] ?? '/data/cache'),

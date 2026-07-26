@@ -252,7 +252,31 @@ knowing before you paste a log into an issue.
 
 ---
 
-## 7. Updating
+## 7. Knowing when to update
+
+Both images are stamped with the commit they were built from, and the app knows
+its own. `GET /api/version` reports the proxy's; the web bundle carries its own
+inside it.
+
+- When a **new web build** is waiting, the app shows a one-line notice you can
+  dismiss, and **Settings → Version** offers *Reload to update*. Nothing reloads
+  itself: an app that refreshed out from under you mid-hint would be worse than
+  one that waits.
+- When the **proxy reports a different build**, the app says so. That usually
+  means one container was pulled and the other was not — `docker compose pull`
+  fetches both. If they already match on the server, the browser is holding an
+  older bundle and a reload picks the new one up.
+
+Settings always shows both versions and the current state, whether or not the
+notice was dismissed. Dismissal is remembered per version, so the next release
+asks again.
+
+Images built by hand report `dev`, which switches the whole thing off rather
+than comparing versions that do not mean anything.
+
+---
+
+## 8. Updating
 
 Images are published to GHCR on every push to `main`:
 
@@ -270,7 +294,7 @@ them, while the content-hashed assets are cached for a year.
 
 ---
 
-## 8. Troubleshooting
+## 9. Troubleshooting
 
 **The proxy container restarts in a loop.** Check `docker compose logs proxy`;
 it names the cause. An `EACCES` on the cache directory means it is a **bind
@@ -319,6 +343,6 @@ from the Home Screen icon. See §2.
 
 ---
 
-## 9. Synology NAS
+## 10. Synology NAS
 
 See **[SYNOLOGY.md](SYNOLOGY.md)**.

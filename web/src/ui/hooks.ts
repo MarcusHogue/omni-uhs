@@ -2,6 +2,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 
 import { listDocuments, type StoredDocument } from '../storage/db';
+import {
+  applyWaitingUpdate,
+  checkNow,
+  dismiss as dismissUpdate,
+  dismissalKey,
+  getUpdateState,
+  isDismissed,
+  subscribe,
+  type UpdateState,
+} from './update';
 
 export function useOnline(): boolean {
   const [online, setOnline] = useState(() => navigator.onLine);
@@ -116,4 +126,37 @@ export function useLatest(): (fn: (signal: AbortSignal) => Promise<void>) => voi
       if ((error as Error).name !== 'AbortError') throw error;
     });
   }, []);
+}
+
+/**
+ * Whether a newer build is available, and whether the user has waved it away.
+ *
+ * The banner honours the dismissal; Settings deliberately does not — "easy to
+ * ignore in the way, impossible to miss when you go looking" is the whole
+ * design of this feature.
+ */
+export function useAppUpdate(): {
+  state: UpdateState;
+  dismissed: boolean;
+  dismiss: () => void;
+  apply: () => void;
+  check: () => Promise<void>;
+} {
+  const [state, setState] = useState<UpdateState>(() => getUpdateState());
+  const [dismissedKey, setDismissedKey] = useState<string | null>(null);
+
+  useEffect(() => subscribe(setState), []);
+
+  return {
+    state,
+    dismissed: dismissedKey === dismissalKey(state) || isDismissed(state),
+    dismiss: () => {
+      dismissUpdate(state);
+      setDismissedKey(dismissalKey(state));
+    },
+    apply: () => void applyWaitingUpdate(),
+    check: async () => {
+      setState(await checkNow());
+    },
+  };
 }
