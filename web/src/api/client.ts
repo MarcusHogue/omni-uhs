@@ -85,6 +85,8 @@ export interface ImageRelease {
   /** The published build's name, when the image declares one. */
   available: string | null;
   running: string | null;
+  /** Short hash of the published manifest — the image's identity without a label. */
+  digest: string | null;
   error?: string;
 }
 

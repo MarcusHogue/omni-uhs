@@ -44,6 +44,15 @@ export interface ReleaseSummary {
   /** Images whose published build differs from what is running here. */
   behind: string[];
   /**
+   * What exactly is being offered, as `name@digest` per behind image.
+   *
+   * The dismissal key. A version name cannot serve: an image without a label
+   * has none, so every unlabelled release after the first would reuse the same
+   * key and be silently swallowed. A manifest hash always exists and changes
+   * exactly when the image does.
+   */
+  identity: string;
+  /**
    * Images the comparison could not settle.
    *
    * Kept separate from `behind` and never folded into it. An unsettled image is
@@ -170,14 +179,28 @@ export async function refreshRelease(): Promise<void> {
       .filter((image) => image.current === false)
       .map((image) => image.name);
 
+    // Name the build from the images that are actually *behind*. Taking it from
+    // every image collapses to null the moment one is current and the other is
+    // not — which is precisely the case worth naming — and that null then makes
+    // two different releases share a dismissal key.
     const versions = new Set(
-      status.images.map((image) => image.available).filter((v): v is string => v !== null),
+      status.images
+        .filter((image) => image.current === false)
+        .map((image) => image.available)
+        .filter((v): v is string => v !== null),
     );
 
     state.release = {
       version: versions.size === 1 ? [...versions][0]! : null,
       images: status.images,
       behind,
+      // The published manifests of the images that are behind. This is what a
+      // dismissal is keyed on: it exists for an unlabelled image, and it
+      // changes exactly when the image does.
+      identity: status.images
+        .filter((image) => image.current === false)
+        .map((image) => `${image.name}@${image.digest ?? image.available ?? 'unknown'}`)
+        .join(','),
       unknown: status.images.filter((image) => image.current === null).map((image) => image.name),
     };
     derive();
@@ -287,13 +310,10 @@ export const dismissalKey = (state: UpdateState): string => {
     return `version-mismatch:${state.proxyVersion ?? 'unknown'}`;
   }
   if (state.reason === 'registry-release') {
-    const release = state.release;
-    // Not just the version: "web is behind" and "both are behind" at the same
-    // published build are different news, and waving away the first should not
-    // silence the second.
-    return `registry-release:${release?.version ?? 'unknown'}:${
-      release?.behind.join(',') ?? ''
-    }`;
+    // Keyed on which images are behind and exactly what each is offering, so a
+    // later release always asks again — including for an image that carries no
+    // version label and can only be told apart by its manifest.
+    return `registry-release:${state.release?.identity ?? 'unknown'}`;
   }
   return `${state.reason ?? 'none'}:session`;
 };

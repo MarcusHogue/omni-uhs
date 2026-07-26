@@ -413,15 +413,27 @@ export function Settings(): JSX.Element {
                 </p>
               </div>
             )}
+            {/*
+              "Up to date" is a claim about all three checks, so it needs all
+              three to have happened. `checked` only covers /api/version; with
+              the registry unreachable every image is "could not be compared"
+              and saying this anyway would contradict the list directly above.
+            */}
             {update.state.reason === null &&
-              (update.state.checked ? (
-                <p className="muted">Up to date.</p>
-              ) : (
+              (!update.state.checked ? (
                 <p className="muted">
                   {online
                     ? 'The proxy has not answered a version check yet, so there is nothing to compare against.'
                     : 'Offline — versions can only be compared with a connection.'}
                 </p>
+              ) : (update.state.release?.unknown.length ?? 0) > 0 ? (
+                <p className="muted">
+                  The app and the proxy match. Whether a newer image has been published
+                  could not be checked
+                  {online ? '' : ' — you are offline'}.
+                </p>
+              ) : (
+                <p className="muted">Up to date.</p>
               ))}
             <div className="buttons">
               <button type="button" onClick={() => void update.check()}>

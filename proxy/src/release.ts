@@ -61,6 +61,15 @@ export interface ImageRelease {
   available: string | null;
   /** The version this deployment is running for this image. */
   running: string | null;
+  /**
+   * Short hash of the published manifest.
+   *
+   * The image's identity when it has no version label, which is what the UI
+   * keys a dismissal on: a name it may not have cannot distinguish one
+   * unlabelled release from the next, and a dismissal keyed on "unknown" would
+   * swallow every release after the first.
+   */
+  digest: string | null;
   error?: string;
 }
 
@@ -207,7 +216,7 @@ async function inspect(
   cache: Cache,
   image: ParsedImage,
   running: string | null,
-): Promise<{ current: boolean | null; available: string | null }> {
+): Promise<{ current: boolean | null; available: string | null; digest: string }> {
   const auth = await readJson<TokenPayload>(
     cache,
     `https://${GHCR}/token?scope=${encodeURIComponent(`repository:${image.repository}:pull`)}&service=${GHCR}`,
@@ -266,7 +275,7 @@ async function inspect(
     /* the name is a nicety; the comparison above already stands */
   }
 
-  return { current, available };
+  return { current, available, digest: digestOf(latestRaw).slice(0, 12) };
 }
 
 /**
@@ -304,13 +313,14 @@ export async function checkRelease(
       const runningHere =
         target.name === 'web' ? (webVersion?.trim() || null) : running;
       try {
-        const { current, available } = await inspect(cache, target, runningHere);
+        const { current, available, digest } = await inspect(cache, target, runningHere);
         return {
           name: target.name,
           reference: target.reference,
           current,
           available,
           running: runningHere,
+          digest,
         };
       } catch (error) {
         return {
@@ -319,6 +329,7 @@ export async function checkRelease(
           current: null,
           available: null,
           running: runningHere,
+          digest: null,
           error: (error as Error).message,
         };
       }

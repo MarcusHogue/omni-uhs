@@ -90,9 +90,12 @@ export async function gatherPages(
   const add = (titles: string[]): void => {
     for (const title of titles) {
       if (seen.size >= MAX_PAGES) return;
-      // Sub-pages and the game's own overview page are all fair game; only
-      // other namespaces (Talk:, File:, Category:) are not.
-      if (title.includes(':')) continue;
+      // No namespace filtering here. Both list calls already ask for namespace
+      // 0 and `titlesFrom` re-checks it, and a colon is not a namespace marker
+      // in an article title — "Chapter 1: The Beginning" is a page, and
+      // dropping it was silent. Worse than silent: a wiki whose categories
+      // still met SPARSE would skip the search fallback too, so those pages
+      // could never be reached at all.
       seen.add(title);
     }
   };
