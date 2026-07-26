@@ -81,6 +81,19 @@ export interface WikiWalkthroughOptions {
    * would produce references that never resolve.
    */
   images?: boolean;
+  /**
+   * What the wiki says a template call expands to, keyed on the call's inner
+   * text — `AW` for `{{AW}}`.
+   *
+   * Some words only exist in a template's *definition*, which is on the wiki and
+   * not in the page: `{{AW}}` is how Animal Well's pages write the game's name,
+   * so "a secret collectible animal in {{AW}}" arrived as "…animal in ." Nothing
+   * in the source can recover that, so the download layer asks the wiki and
+   * passes the answers in. Absent, the parser behaves exactly as before.
+   *
+   * See `collectExpandable`, which says which calls are worth asking about.
+   */
+  expanded?: Record<string, string>;
 }
 
 /** Templates whose content is a spoiler and must start hidden. */
@@ -153,6 +166,11 @@ const cleaned = (text: string): string =>
     // Prince's worked dartboard examples are arithmetic: `\times 4 \times 2` and
     // `\frac{8}{4}` are the calculation the reader came for, so they are
     // translated rather than shown raw or dropped.
+    // A repeating decimal: keep the bar, or `0.\overline{6}` becomes 0.6 and
+    // means something else. U+0305 sits over the digit before it.
+    .replace(/\\overline\s*\{([^{}]*)\}/g, (_all, digits: string) =>
+      [...digits].map((c) => `${c}\u0305`).join(''),
+    )
     .replace(/\\frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}/g, '$1/$2')
     .replace(/\\times/g, '×')
     .replace(/\\cdot/g, '·')
@@ -167,7 +185,12 @@ const cleaned = (text: string): string =>
     .replace(/&lt;/g, '<')
     .replace(/&gt;/g, '>')
     .replace(/&quot;/g, '"')
-    .replace(/\s+/g, ' ');
+    .replace(/\s+/g, ' ')
+    // Removing a picture or a citation leaves the space that was in front of
+    // it: "solved the puzzle in The Precipice ." Safe to close up now that
+    // template expansion has recovered the *words* that used to go missing —
+    // before that, this gap was the only sign a sentence had lost one.
+    .replace(/\s+([.,;:!?])/g, '$1');
 
 /**
  * Strip wiki markup down to display text, keeping internal links as link text.
@@ -175,11 +198,11 @@ const cleaned = (text: string): string =>
  * Deliberately conservative: this is a reader, not a renderer, so anything not
  * understood is dropped rather than shown as raw markup.
  */
-export function stripMarkup(text: string): string {
+export function stripMarkup(text: string, expanded: Record<string, string> = {}): string {
   return cleaned(
     // Templates go too. Without this a section title kept them verbatim, and
     // Obra Dinn's transcript headings read `Transcript {{play|End_pt1.ogg}}`.
-    extractTemplates(removed(text)).text
+    extractTemplates(removed(text), expanded).text
       .replace(/\[\[([^\]|]+)\|([^\]]+)\]\]/g, '$2')
       .replace(/\[\[([^\]]+)\]\]/g, '$1'),
   ).trim();
@@ -297,6 +320,56 @@ function templateText(buffer: string): string | null {
 }
 
 /**
+ * What a template expands to, if the wiki was asked and the answer is a phrase.
+ *
+ * Bounded to a single line: this is for the templates that stand in for words,
+ * and anything that came back as a block is layout — a navbox, a reference
+ * list — which the parser was right to drop in the first place. The result is
+ * wikitext, so `''[[Animal Well]]''` still goes through the usual link and
+ * emphasis handling downstream.
+ */
+const EXPANDED_MAX = 200;
+
+/** Block markup: a navbox or a stub notice, not a phrase. */
+const EXPANDED_BLOCK = /\{\||<(?:div|table|ul|ol|dl|tr|td|th)\b/i;
+
+function expandedText(buffer: string, expanded: Record<string, string>): string | null {
+  const value = expanded[buffer.trim()]?.trim();
+  if (!value || value.includes('\n') || value.length > EXPANDED_MAX) return null;
+  // Tunic's `{{Stub}}` expands to a `<div><table>` notice. Length alone would
+  // usually catch it, but the test that matters is what it *is*.
+  if (EXPANDED_BLOCK.test(value)) return null;
+  return value;
+}
+
+/**
+ * The template calls worth asking the wiki to expand.
+ *
+ * Only the ones the parser is about to drop, so a call it can already read —
+ * `{{ColorText|add|Blue}}` — costs no request. Only leaf calls, with no template
+ * nested inside: the resolver works inside-out, so an outer call's text no
+ * longer matches its source by the time it is looked up.
+ *
+ * Page-context magic words are left out. Their expansion depends on which page
+ * is asking, and these are batched across a whole game, so the answer would be
+ * confidently wrong rather than merely missing.
+ */
+const PAGE_CONTEXT = /\b(PAGENAME|SUBPAGENAME|FULLPAGENAME|BASEPAGENAME|NAMESPACE|REVISIONID|SITENAME)\b/;
+
+export function collectExpandable(wikitext: string): string[] {
+  const found = new Set<string>();
+  for (const match of stripBlockMarkup(wikitext).matchAll(/\{\{([^{}\n]*)\}\}/g)) {
+    const inner = match[1]!.trim();
+    if (!inner || inner.length > 300) continue;
+    if (SPOILER_TEMPLATES.test(inner)) continue;
+    if (PAGE_CONTEXT.test(inner)) continue;
+    if (templateText(inner) !== null) continue;
+    found.add(inner);
+  }
+  return [...found];
+}
+
+/**
  * What a spoiler template is actually hiding.
  *
  * `{{spoiler|the butler did it}}` is one unnamed parameter and the whole thing
@@ -320,7 +393,10 @@ function spoilerPayload(buffer: string): string {
 }
 
 /** Remove templates, tracking whether any of them marked a spoiler. */
-function extractTemplates(text: string): { text: string; spoiler: boolean } {
+function extractTemplates(
+  text: string,
+  expanded: Record<string, string> = {},
+): { text: string; spoiler: boolean } {
   let spoiler = false;
   let out = '';
   /**
@@ -358,7 +434,7 @@ function extractTemplates(text: string): { text: string; spoiler: boolean } {
         if (payload) emit(` ${payload} `);
       } else {
         // No padding: the template sits mid-sentence, next to its punctuation.
-        emit(templateText(buffer) ?? '');
+        emit(templateText(buffer) ?? expandedText(buffer, expanded) ?? '');
       }
       continue;
     }
@@ -406,9 +482,14 @@ function flattenOrDrop(template: string): string {
 
   const body = bodyParam(template);
   if (body === null) return newlines;
+  // Recursively, because a container holds containers: Blue Prince wraps
+  // SpoilerBoxes in a CollapsedBox. Without this the inner ones came out as
+  // source — an unbalanced `{{SpoilerBox|…` on one line and a stray `}}` on
+  // another, which reached the reader as "except the memo. }} }}".
+  const inner = stripBlockMarkup(body);
   // The body where the box was, padded back to the template's own line count so
   // section splitting sees the same shape it did before.
-  return body + newlines.slice(body.replace(/[^\n]/g, '').length);
+  return inner + newlines.slice(inner.replace(/[^\n]/g, '').length);
 }
 
 /**
@@ -526,7 +607,12 @@ const joinBlocks = (blocks: Block[]): Inline[] =>
  * `gallery` — so a gallery survived into a hint as prose reading
  * `<gallery widths="200px"> File:Conceptart 01.jpg File:Conceptart 02.jpg`.
  */
-function toBlocks(body: string, resolve?: Resolver, withImages = false): Block[] {
+function toBlocks(
+  body: string,
+  resolve?: Resolver,
+  withImages = false,
+  expanded: Record<string, string> = {},
+): Block[] {
   const { text, images: fromGalleries } = extractGalleries(body);
   const blocks: Block[] = [];
   let paragraph: string[] = [];
@@ -558,7 +644,7 @@ function toBlocks(body: string, resolve?: Resolver, withImages = false): Block[]
     }
     if (/^\s*(\{\||\|\}|\|[-+}]|!)/.test(line)) continue; // tables: skip
 
-    const { text: withoutTemplates, spoiler } = extractTemplates(line);
+    const { text: withoutTemplates, spoiler } = extractTemplates(line, expanded);
     const listItem = /^[*#:;]+\s*(.*)$/.exec(withoutTemplates);
     if (listItem) {
       flush();
@@ -586,7 +672,10 @@ interface Section {
   body: string;
 }
 
-export function splitSections(wikitext: string): Section[] {
+export function splitSections(
+  wikitext: string,
+  expanded: Record<string, string> = {},
+): Section[] {
   const sections: Section[] = [];
   let current: Section = { level: 1, title: '', body: '' };
   for (const line of wikitext.split('\n')) {
@@ -595,7 +684,7 @@ export function splitSections(wikitext: string): Section[] {
       sections.push(current);
       current = {
         level: heading[1]!.length,
-        title: stripMarkup(heading[2]!),
+        title: stripMarkup(heading[2]!, expanded),
         body: '',
       };
       continue;
@@ -650,6 +739,8 @@ function pageToSubject(
   images = false,
   /** e.g. https://blue-prince.fandom.com/wiki/ — for the "view on the wiki" link. */
   wikiBase = '',
+  /** What the wiki says its templates expand to. */
+  expanded: Record<string, string> = {},
 ): SubjectNode {
   const label = page.title.includes('/') ? page.title.slice(page.title.indexOf('/') + 1) : page.title;
   const root: SubjectNode = {
@@ -662,13 +753,13 @@ function pageToSubject(
   const stack: { level: number; node: SubjectNode }[] = [{ level: 1, node: root }];
   let counter = 0;
 
-  for (const section of splitSections(stripBlockMarkup(page.wikitext))) {
+  for (const section of splitSections(stripBlockMarkup(page.wikitext), expanded)) {
     // Filing, not content: references, galleries, track listings. Dropped
     // rather than ranked — they are only a few per cent of a wiki's prose, but
     // they are rows, and rows are what you scroll past.
     if (rank && isNeverHint(section.title)) continue;
 
-    const blocks = toBlocks(section.body, resolve, images);
+    const blocks = toBlocks(section.body, resolve, images, expanded);
 
     let target = root;
     if (section.title) {
@@ -901,6 +992,7 @@ export function parseWikiWalkthrough(
   const rank = options.rank ?? false;
   const rankOf = new Map<string, number>();
   const images = options.images ?? false;
+  const expanded = options.expanded ?? {};
 
   kept.forEach((page, index) => {
     const subject = pageToSubject(
@@ -912,6 +1004,7 @@ export function parseWikiWalkthrough(
       rankOf,
       images,
       options.baseUrl,
+      expanded,
     );
     if (subject.children.length > 0) children.push(subject);
     else if (rank) {

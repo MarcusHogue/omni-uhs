@@ -14,8 +14,9 @@ import type { HintDocument, ImageNode, ParseResult } from '../parser/ast';
 import { walk } from '../parser/ast';
 import { parseInvisiclues } from '../parser/invisiclues';
 import { parseUhs } from '../parser/uhs';
-import { parseWikiWalkthrough } from '../parser/wikitext';
+import { collectExpandable, parseWikiWalkthrough } from '../parser/wikitext';
 import { putDocument, type StoredDocument, type StoredImage } from './db';
+import { expandTemplates } from './expand';
 import { fetchImages } from './images';
 import { imageSettings } from './settings';
 
@@ -389,6 +390,13 @@ async function downloadWiki(
   // order categories come back in is not stable and means nothing.
   fetched.sort((a, b) => a.title.localeCompare(b.title));
 
+  // Ask the wiki what its own templates say, before parsing. Some words exist
+  // only in a template's definition — `{{AW}}` is how Animal Well's pages write
+  // the game's name — and no reading of the page can recover them.
+  const calls = new Set<string>();
+  for (const page of fetched) for (const call of collectExpandable(page.wikitext)) calls.add(call);
+  const templates = await expandTemplates(host, [...calls], options.signal);
+
   const result = parseWikiWalkthrough(fetched, {
     kind: entry.sourceKind,
     gameTitle,
@@ -400,7 +408,9 @@ async function downloadWiki(
     reveal: 'progressive',
     rank: true,
     images: policy.enabled,
+    expanded: templates.expanded,
   });
+  result.warnings.push(...templates.warnings);
 
   if (result.document.root.children.length === 0) {
     throw new Error(`No readable content found on ${host}.`);

@@ -2,7 +2,12 @@ import { describe, expect, it } from 'vitest';
 
 import type { HintGroupNode, ParseResult, SubjectNode, TextNode } from '../../src/parser/ast.js';
 import { inlineText, walk } from '../../src/parser/ast.js';
-import { parseWikiWalkthrough, splitSections, stripMarkup } from '../../src/parser/wikitext/index.js';
+import {
+  collectExpandable,
+  parseWikiWalkthrough,
+  splitSections,
+  stripMarkup,
+} from '../../src/parser/wikitext/index.js';
 
 const OPTIONS = {
   kind: 'strategywiki' as const,
@@ -443,6 +448,65 @@ describe('templates standing in for words', () => {
     const out = text('== S ==\nSome prose.{{Reflist|30em}}\n');
     expect(out).toContain('Some prose.');
     expect(out).not.toContain('30em');
+  });
+});
+
+describe('template expansion', () => {
+  const parse = (wikitext: string, expanded: Record<string, string> = {}): ParseResult =>
+    parseWikiWalkthrough([{ title: 'Secret rabbits', wikitext, revision: '1' }], {
+      ...OPTIONS,
+      kind: 'wikigg',
+      reveal: 'progressive',
+      rank: true,
+      expanded,
+    });
+
+  const text = (wikitext: string, expanded: Record<string, string> = {}): string =>
+    [...walk(parse(wikitext, expanded).document.root)]
+      .flatMap((node) => (node.type === 'hints' ? node.hints : []))
+      .map((hint) => inlineText(hint.content))
+      .join(' | ');
+
+  const PAGE = '== Rabbits ==\nA secret collectible animal in {{AW}}.\n';
+
+  it('asks only about the calls it was going to drop', () => {
+    // `{{ColorText|add|Blue}}` is already readable, so asking about it would be
+    // a request spent on an answer already in hand.
+    const calls = collectExpandable(
+      '{{AW}} and {{ColorText|add|Blue}} and {{short|3-3}}\n',
+    );
+    expect(calls).toContain('AW');
+    expect(calls).toContain('short|3-3');
+    expect(calls).not.toContain('ColorText|add|Blue');
+  });
+
+  it('leaves out anything whose answer depends on the page', () => {
+    // Expansions are batched across a whole game, so there is no page to answer
+    // for. A shared answer would be confidently wrong rather than merely absent.
+    expect(collectExpandable('Welcome to {{PAGENAME}}.\n')).toEqual([]);
+    expect(collectExpandable('See {{SITENAME}}.\n')).toEqual([]);
+  });
+
+  it('puts the word back, and reads the result as wikitext', () => {
+    // Real: animalwell.wiki.gg writes the game's name as {{AW}}, so the sentence
+    // arrived as "a secret collectible animal in ." — and now that orphaned
+    // spaces are closed up, as the *seamless* "animal in.", which is worse: the
+    // gap was at least visible. Expansion is what makes closing them honest.
+    expect(text(PAGE)).toContain('animal in.');
+    expect(text(PAGE, { AW: "''[[Animal Well]]''" })).toContain('animal in Animal Well.');
+  });
+
+  it('refuses an expansion that is a block rather than a phrase', () => {
+    // Tunic's {{Stub}} expands to a `<div><table>` notice; Reflist to a list.
+    const out = text('== S ==\nProse.{{Stub}}\n', {
+      Stub: '<div class="nomobile"><table style="">a stub notice</table></div>',
+    });
+    expect(out).toContain('Prose.');
+    expect(out).not.toContain('stub notice');
+  });
+
+  it('behaves exactly as before when nothing was expanded', () => {
+    expect(text(PAGE, {})).toBe(text(PAGE));
   });
 });
 
